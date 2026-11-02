@@ -1,144 +1,122 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { io } from 'socket.io-client';
-import { Activity, ArrowUpRight, Check, Clock3, MapPin, Radio, ShieldCheck } from 'lucide-react';
+import { Activity, ArrowUpRight, Check, Clock3, LoaderCircle, MapPin, Radio, ShieldCheck, TriangleAlert } from 'lucide-react';
 import { isIncident } from '../../../shared/incident.mjs';
+import { API_URL } from '../config.js';
 import './GuardianDashboard.css';
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:4000';
-const DEMO_MODE = import.meta.env.VITE_DEMO_MODE !== 'false';
+function elapsedTime(date, now) {
+  const seconds = Math.max(0, Math.floor((now - Date.parse(date)) / 1000));
+  if (seconds < 60) return `${seconds}s ago`;
+  const minutes = Math.floor(seconds / 60);
+  return minutes < 60 ? `${minutes}m ago` : `${Math.floor(minutes / 60)}h ago`;
+}
 
-export default function GuardianDashboard({ search = '' }) {
+function escalationSeconds(date, now) {
+  return Math.max(0, Math.ceil((Date.parse(date) + 30_000 - now) / 1000));
+}
+
+export default function GuardianDashboard({ search = '', onIncidentsChange, onRoleChange, onStatus }) {
   const [alerts, setAlerts] = useState([]);
   const [connection, setConnection] = useState('connecting');
   const [role, setRole] = useState('public');
-  const [acknowledged, setAcknowledged] = useState({});
   const [guardianToken, setGuardianToken] = useState(() => sessionStorage.getItem('fuleGuardianToken') || '');
   const [tokenDraft, setTokenDraft] = useState('');
   const [showTokenForm, setShowTokenForm] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState('');
+  const [ackPending, setAckPending] = useState({});
+  const [now, setNow] = useState(Date.now());
   const socketRef = useRef(null);
   const roleRef = useRef('public');
+  const publishAlerts = (next) => { setAlerts(next); onIncidentsChange?.(next); };
+  const connectionState = (next) => { setConnection(next); onStatus?.(next); };
+  const accessRole = (next) => { roleRef.current = next; setRole(next); onRoleChange?.(next); };
 
   useEffect(() => {
-    const socket = io(API_URL, { transports: ['websocket', 'polling'], auth: { guardianToken } });
-    socketRef.current = socket;
-    socket.on('connect', () => setConnection('online'));
-    socket.on('disconnect', () => setConnection('offline'));
-    socket.on('fule:access', ({ role: accessRole }) => {
-      roleRef.current = accessRole;
-      setRole(accessRole);
-      if (accessRole === 'guardian' && guardianToken) {
-        fetch(`${API_URL}/api/incidents`, { headers: { Authorization: `Bearer ${guardianToken}` } })
-          .then((response) => response.ok ? response.json() : null)
-          .then((data) => { if (data?.incidents) setAlerts(data.incidents); })
-          .catch(() => {});
-      }
+    const socket = io(API_URL, { transports: ['websocket', 'polling'], auth: { guardianToken } }); socketRef.current = socket;
+    socket.on('connect', () => { connectionState('online'); setLoadError(''); });
+    socket.on('disconnect', () => connectionState('offline'));
+    socket.on('connect_error', () => { connectionState('offline'); setLoadError('Live alert connection failed. Reconnecting…'); });
+    socket.on('fule:access', ({ role: nextRole }) => {
+      accessRole(nextRole);
+      if (nextRole !== 'guardian' || !guardianToken) { setLoading(false); return; }
+      fetch(`${API_URL}/api/incidents`, { headers: { Authorization: `Bearer ${guardianToken}` } })
+        .then(async (response) => { if (!response.ok) throw new Error('Could not load incident history.'); return response.json(); })
+        .then((data) => { publishAlerts(data.incidents || []); setLoadError(''); })
+        .catch((error) => setLoadError(error.message))
+        .finally(() => setLoading(false));
     });
-    socket.on('sos_activated', (incident) => {
-      if (isIncident(incident)) setAlerts((current) => [incident, ...current.filter((item) => item.incident_id !== incident.incident_id)].slice(0, 8));
-    });
-    socket.on('incident:public', (incident) => {
-      if (roleRef.current !== 'guardian' && isIncident(incident)) setAlerts((current) => [incident, ...current.filter((item) => item.incident_id !== incident.incident_id)].slice(0, 8));
-    });
-    socket.on('incident_acknowledged', (incident) => {
+    const upsert = (incident) => {
       if (!isIncident(incident)) return;
-      setAcknowledged((current) => ({ ...current, [incident.incident_id]: true }));
-      setAlerts((current) => current.map((item) => item.incident_id === incident.incident_id ? incident : item));
-    });
-    socket.on('incident_clip_ready', (incident) => { if (roleRef.current === 'guardian' && isIncident(incident)) setAlerts((current) => current.map((item) => item.incident_id === incident.incident_id ? incident : item)); });
-    for (const event of ['incident_dispatch_ready', 'incident_escalated', 'sos_cancelled']) {
-      socket.on(event, (incident) => {
-        if (isIncident(incident)) setAlerts((current) => current.map((item) => item.incident_id === incident.incident_id ? incident : item));
-      });
-    }
-    socket.on('incident:public:update', (update) => {
-      setAlerts((current) => current.map((item) => item.incident_id === update.incident_id
-        ? { ...item, status: update.status, escalated: update.escalated ?? item.escalated, escalation_flag: update.escalation_flag ?? item.escalation_flag }
-        : item));
-    });
-    return () => socket.disconnect();
+      publishAlerts((current) => [incident, ...current.filter((item) => item.incident_id !== incident.incident_id)].slice(0, 40));
+      setAckPending((current) => ({ ...current, [incident.incident_id]: false }));
+    };
+    socket.on('sos_activated', upsert);
+    socket.on('incident:public', (incident) => { if (roleRef.current !== 'guardian') upsert(incident); });
+    for (const event of ['incident_acknowledged', 'incident_dispatch_ready', 'incident_escalated', 'sos_cancelled', 'incident_clip_ready']) socket.on(event, upsert);
+    socket.on('incident:public:update', (update) => publishAlerts((current) => current.map((item) => item.incident_id === update.incident_id ? { ...item, ...update } : item)));
+    const tick = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => { window.clearInterval(tick); socket.disconnect(); };
   }, [guardianToken]);
 
   const visibleAlerts = useMemo(() => {
-    const query = search.trim().toLowerCase();
-    if (!query) return alerts;
-    return alerts.filter((alert) => [alert.summary, alert.module, alert.location?.address, `${alert.location?.lat}, ${alert.location?.lng}`, alert.clip_url]
-      .some((value) => String(value || '').toLowerCase().includes(query)));
+    const query = search.trim().toLowerCase(); if (!query) return alerts;
+    return alerts.filter((alert) => [alert.summary, alert.module, alert.location?.address, alert.status, alert.threat_level].some((value) => String(value || '').toLowerCase().includes(query)));
   }, [alerts, search]);
 
   async function connectGuardian(event) {
-    event.preventDefault();
-    const inviteCode = tokenDraft.trim();
-    if (!inviteCode) return;
+    event.preventDefault(); const invite = tokenDraft.trim(); if (!invite) return;
+    setLoadError('');
     try {
-      const response = await fetch(`${API_URL}/api/guardians/verify`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ invite_code: inviteCode })
-      });
-      const result = await response.json();
-      if (!response.ok) throw new Error(result.error || 'Invite verification failed.');
-      sessionStorage.setItem('fuleGuardianToken', result.access_token);
-      setGuardianToken(result.access_token);
-      setTokenDraft('');
-      setShowTokenForm(false);
-    } catch (error) {
-      setTokenDraft('');
-      window.alert(error.message);
-    }
+      const response = await fetch(`${API_URL}/api/guardians/verify`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ invite_code: invite }) });
+      const result = await response.json(); if (!response.ok) throw new Error(result.error || 'Guardian verification failed.');
+      sessionStorage.setItem('fuleGuardianToken', result.access_token); setGuardianToken(result.access_token); setShowTokenForm(false); setTokenDraft(''); setLoading(true);
+    } catch (error) { setLoadError(error.message); }
+  }
+
+  function acknowledge(alert) {
+    if (roleRef.current !== 'guardian' || ackPending[alert.incident_id] || alert.status === 'ACKNOWLEDGED') return;
+    setAckPending((current) => ({ ...current, [alert.incident_id]: true }));
+    socketRef.current?.emit('acknowledge_incident', alert.incident_id);
+    window.setTimeout(() => setAckPending((current) => current[alert.incident_id] ? ({ ...current, [alert.incident_id]: false }) : current), 5000);
   }
 
   function disconnectGuardian() {
-    sessionStorage.removeItem('fuleGuardianToken');
-    setGuardianToken('');
-    setAlerts([]);
-    setAcknowledged({});
+    sessionStorage.removeItem('fuleGuardianToken'); setGuardianToken(''); accessRole('public'); publishAlerts([]); setAckPending({}); setLoadError('');
   }
 
-  function acknowledge(incidentId) {
-    if (role === 'guardian') socketRef.current?.emit('acknowledge_incident', incidentId);
-  }
-
-  return (
-    <aside className="guardian-panel" id="dispatch" aria-label="Guardian alarm dashboard">
-      <div className="guardian-panel-header">
-        <div><div className="guardian-overline"><Radio size={13} /> GUARDIAN COMMAND</div><h2>Incoming alarms</h2></div>
-        <div className={`guardian-connection ${connection}`}><i />{connection === 'online' ? 'LIVE' : connection === 'offline' ? 'RECONNECTING' : 'CONNECTING'}</div>
-      </div>
-
-      {role !== 'guardian' && <div className="guardian-access-note"><ShieldCheck size={14} /> Public view · precise location restricted</div>}
-      {role !== 'guardian' && <div className="guardian-auth-area">
-        {showTokenForm ? <form className="guardian-auth-form" onSubmit={connectGuardian}><input type="password" value={tokenDraft} onChange={(event) => setTokenDraft(event.target.value)} placeholder="Guardian invite code" aria-label="Guardian invite code" autoComplete="current-password" /><button type="submit">VERIFY</button></form> : <button className="guardian-auth-open" onClick={() => setShowTokenForm(true)}>Verify guardian invite</button>}
-      </div>}
-      {role === 'guardian' && guardianToken && <button className="guardian-disconnect" onClick={disconnectGuardian}>Disconnect guardian access</button>}
-
-      <div className="alarm-summary"><span className="alarm-summary-icon"><Activity size={16} /></span><span><strong>{alerts.length ? `${alerts.length} active ${alerts.length === 1 ? 'incident' : 'incidents'}` : 'Guardian watch is active'}</strong><small>{role === 'guardian' ? 'Verified guardian safety signals' : 'Public updates are anonymized'}</small></span><span className="alarm-count">{alerts.length.toString().padStart(2, '0')}</span></div>
-
-      <div className="alarm-list" aria-live="polite">
-        {visibleAlerts.length === 0 ? (
-          <div className="guardian-empty"><span className="empty-shield"><ShieldCheck size={21} /></span><strong>{search && alerts.length ? 'No matching incidents' : 'All clear for now'}</strong><span>{search && alerts.length ? 'Try a different search term.' : 'New SOS alerts will appear here in real time.'}</span></div>
-        ) : visibleAlerts.map((alert) => {
-          const coords = alert.location || {};
-          const lat = Number(coords.lat);
-          const lng = Number(coords.lng);
-          const isPrecise = role === 'guardian';
-          const coordText = isPrecise ? `${lat.toFixed(4)}, ${lng.toFixed(4)}` : coords.address;
-          const mapUrl = Number.isFinite(lat) && Number.isFinite(lng) ? `https://www.google.com/maps?q=${lat},${lng}` : null;
-          const threat = alert.threat_level || 'CRITICAL';
-          const isAcknowledged = Boolean(acknowledged[alert.incident_id]) || ['ACKNOWLEDGED', 'CANCELLED', 'FALSE_ALARM', 'RESOLVED'].includes(alert.status);
-          return (
-            <article className="alarm-card" key={alert.incident_id}>
-              <div className="alarm-card-top"><span className={`threat-badge threat-${threat.toLowerCase()}`}><i />THREAT {threat}</span><time><Clock3 size={12} />{new Date(alert.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</time></div>
-              <div className="alarm-type">{alert.module.replaceAll('_', ' ')}</div>
-              <p className="alarm-synthesis">{alert.summary}</p>
-              {role === 'guardian' && alert.stream_url && <div className="guardian-live-stream"><iframe title={`Private guardian view for ${alert.incident_id}`} src={`https://player.twitch.tv/?channel=${encodeURIComponent(alert.stream_url.split('/').pop())}&parent=${encodeURIComponent(window.location.hostname)}&muted=true`} allowFullScreen allow="autoplay; fullscreen" /><span><Radio size={12} /> GUARDIAN LIVE FEED</span></div>}
-              <div className="alarm-location-row">{isPrecise && mapUrl ? <a className="location-link" href={mapUrl} target="_blank" rel="noreferrer"><MapPin size={15} /><span><small>PRECISE GPS PIN</small><strong>{coordText}</strong></span><ArrowUpRight size={13} /></a> : <span className="location-link public-location"><MapPin size={15} /><span><small>{isPrecise ? 'LOCATION UNAVAILABLE' : 'APPROXIMATE LOCATION'}</small><strong>{isPrecise ? 'No GPS supplied' : coordText}</strong></span></span>}{alert.clip_url && <a className="open-feed" href={alert.clip_url} target="_blank" rel="noreferrer">OPEN CLIP <ArrowUpRight size={12} /></a>}</div>
-              <div className="alarm-card-meta"><span>15-SEC AI SYNTHESIS</span><span>{alert.source.toUpperCase()} · {alert.status}</span></div>
-              {alert.escalated && <div className="escalation-note">ESCALATED · {alert.escalation_flag}</div>}
-              <button className={`acknowledge-button ${isAcknowledged ? 'acknowledged' : ''}`} onClick={() => acknowledge(alert.incident_id)} disabled={isAcknowledged || role !== 'guardian'}>{role !== 'guardian' ? <><ShieldCheck size={15} /> GUARDIAN ACCESS REQUIRED</> : isAcknowledged ? <><Check size={15} /> ACKNOWLEDGED · DISPATCHING</> : <><ShieldCheck size={15} /> ACKNOWLEDGE &amp; DISPATCH</>}</button>
-            </article>
-          );
-        })}
-      </div>
-
-      <div className="guardian-panel-foot"><span><i /> Secure response channel</span><span>{DEMO_MODE ? 'DEMO MODE' : role === 'guardian' ? 'GUARDIAN' : 'PUBLIC'}</span></div>
-    </aside>
-  );
+  const activeCount = alerts.filter((item) => ['PENDING_DISPATCH', 'DISPATCHING', 'ESCALATED'].includes(item.status)).length;
+  return <aside className="guardian-panel" id="feeds" aria-label="Guardian alert panel">
+    <div className="guardian-panel-header"><div><p className="eyebrow"><Radio size={13}/> GUARDIAN NETWORK</p><h2>Emergency alerts</h2></div><span className={`guardian-connection ${connection}`}><i/>{connection === 'online' ? 'LIVE' : connection === 'offline' ? 'OFFLINE' : 'CONNECTING'}</span></div>
+    {role !== 'guardian' && <div className="guardian-access"><ShieldCheck size={15}/><span>Public feed · private details require verification</span></div>}
+    {role !== 'guardian' && <div className="guardian-auth">{showTokenForm ? <form className="guardian-auth-form" onSubmit={connectGuardian}><label className="visually-hidden" htmlFor="guardian-invite">Guardian invite code</label><input id="guardian-invite" type="password" value={tokenDraft} onChange={(event) => setTokenDraft(event.target.value)} placeholder="Guardian invite code" autoComplete="current-password"/><button type="submit">VERIFY</button></form> : <button className="guardian-auth-button" onClick={() => setShowTokenForm(true)}>Verify as guardian</button>}</div>}
+    {role === 'guardian' && <button className="guardian-logout" onClick={disconnectGuardian}>Disconnect guardian access</button>}
+    <div className="alerts-overview"><span className="overview-mark"><Activity size={17}/></span><span><strong>{activeCount} active {activeCount === 1 ? 'alert' : 'alerts'}</strong><small>{role === 'guardian' ? 'Guardian only incident details' : 'Anonymized safety notices'}</small></span></div>
+    {loadError && <div className="panel-error" role="alert"><TriangleAlert size={14}/>{loadError}</div>}
+    <div className="alert-list" id="logs" aria-live="polite">
+      {loading ? <div className="panel-state"><LoaderCircle className="spinner" size={22}/><strong>Loading alert feed</strong><span>Connecting to live safety updates…</span></div>
+        : visibleAlerts.length === 0 ? <div className="panel-state"><span className="empty-shield"><ShieldCheck size={23}/></span><strong>{search && alerts.length ? 'No matching alerts' : 'No active alerts'}</strong><span>{search && alerts.length ? 'Try a different search.' : 'New alerts will appear here in real time.'}</span></div>
+          : visibleAlerts.map((alert) => {
+            const threat = alert.threat_level;
+            const address = alert.location?.address || 'Location unavailable';
+            const acknowledged = alert.status === 'ACKNOWLEDGED';
+            const activeStatus = ['PENDING_DISPATCH', 'DISPATCHING', 'ESCALATED'].includes(alert.status);
+            const countdown = escalationSeconds(alert.created_at, now);
+            return <article className="alert-card" key={alert.incident_id}>
+              <div className="alert-card-top"><span className={`threat-badge threat-${threat.toLowerCase()}`}><i/>THREAT · {threat}</span><time dateTime={alert.created_at} title={new Date(alert.created_at).toLocaleString()}><Clock3 size={12}/>{elapsedTime(alert.created_at, now)}</time></div>
+              <div className="alert-category">{alert.module.replaceAll('_', ' ')}</div>
+              <p className="alert-summary">{alert.summary}</p>
+              <div className="alert-location"><MapPin size={14}/><span>{address}</span></div>
+              {activeStatus && <div className="escalation-countdown" role="timer" aria-label={countdown ? `Escalation in ${countdown} seconds` : 'Escalation is due'}><span><Clock3 size={13}/>ESCALATION</span><strong>{countdown ? `00:${String(countdown).padStart(2, '0')}` : 'DUE'}</strong></div>}
+              <div className="alert-meta"><span>{alert.source.toUpperCase()} · {alert.status.replaceAll('_', ' ')}</span>{alert.clip_url && <a href={alert.clip_url} target="_blank" rel="noreferrer" aria-label="Open clip evidence">CLIP EVIDENCE <ArrowUpRight size={12}/></a>}</div>
+              {alert.escalated && <p className="alert-escalation-note">{alert.escalation_flag}</p>}
+              <button className={`acknowledge-button ${acknowledged ? 'acknowledged' : ''}`} onClick={() => acknowledge(alert)} disabled={role !== 'guardian' || acknowledged || Boolean(ackPending[alert.incident_id])} aria-label={acknowledged ? 'Incident acknowledged' : `Acknowledge and dispatch incident ${alert.incident_id}`}>
+                {acknowledged ? <><Check size={15}/>ACKNOWLEDGED</> : ackPending[alert.incident_id] ? <><LoaderCircle className="spinner" size={15}/>SENDING…</> : role !== 'guardian' ? <><ShieldCheck size={15}/>GUARDIAN ACCESS REQUIRED</> : <><ShieldCheck size={15}/>ACKNOWLEDGE &amp; DISPATCH</>}
+              </button>
+            </article>;
+          })}
+    </div>
+    <footer className="guardian-panel-foot"><span><i className={connection === 'online' && role === 'guardian' ? 'online' : ''}/>{role === 'guardian' ? 'Verified secure channel' : 'Public read-only feed'}</span><span>{role === 'guardian' ? 'GUARDIAN' : 'PUBLIC'}</span></footer>
+  </aside>;
 }
