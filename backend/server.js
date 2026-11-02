@@ -16,12 +16,30 @@ dotenv.config({ path: fileURLToPath(new URL('./.env', import.meta.url)) });
 
 const app = express();
 const httpServer = http.createServer(app);
+httpServer.requestTimeout = 15_000;
+httpServer.headersTimeout = 20_000;
+httpServer.keepAliveTimeout = 5_000;
+httpServer.maxRequestsPerSocket = 1_000;
 const port = Number(process.env.PORT) || 4000;
 const allowedOrigin = process.env.FRONTEND_ORIGIN || 'http://localhost:5173';
-const demoMode = process.env.DEMO_MODE !== 'false';
+const demoMode = process.env.DEMO_MODE === 'true';
+const parsedAllowedOrigin = new URL(allowedOrigin);
+if (!['http:', 'https:'].includes(parsedAllowedOrigin.protocol) || parsedAllowedOrigin.origin !== allowedOrigin) {
+  throw new Error('FRONTEND_ORIGIN must be a single HTTP(S) origin without a path.');
+}
+if (!demoMode && parsedAllowedOrigin.protocol !== 'https:' && !['localhost', '127.0.0.1', '::1'].includes(parsedAllowedOrigin.hostname)) {
+  throw new Error('Non-demo deployments must use an HTTPS FRONTEND_ORIGIN.');
+}
 if (demoMode) seedDemoInvite(process.env.FULE_DEMO_GUARDIAN_INVITE);
 
-const io = new Server(httpServer, { cors: { origin: allowedOrigin, methods: ['GET', 'POST'], credentials: true } });
+const io = new Server(httpServer, {
+  cors: { origin: allowedOrigin, methods: ['GET', 'POST'], credentials: true },
+  maxHttpBufferSize: 64 * 1024,
+  allowRequest: (request, callback) => {
+    const origin = request.headers.origin;
+    callback(null, !origin || origin === allowedOrigin);
+  }
+});
 const rateLimitSos = createStreamerRateLimiter({ limit: 3, windowMs: 5 * 60 * 1000 });
 const incidents = new Map();
 const cancelCredentials = new Map();
@@ -29,9 +47,71 @@ const timers = new Map();
 const inviteAttempts = new Map();
 const streamerLocations = new Map();
 const sessionCookie = 'fule_twitch_session';
+const requestBuckets = new Map();
+const creatingIncidents = new Set();
+const socketConnectionsByIp = new Map();
+const socketAttemptsByIp = new Map();
 
-app.use(cors({ origin: allowedOrigin, credentials: true }));
-app.use(express.json({ limit: '1mb' }));
+app.disable('x-powered-by');
+app.set('trust proxy', false);
+app.use(cors({
+  origin(origin, callback) {
+    return callback(null, !origin || origin === allowedOrigin);
+  },
+  methods: ['GET', 'POST', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  credentials: true,
+  maxAge: 600
+}));
+app.use((req, res, next) => {
+  res.set({
+    'X-Content-Type-Options': 'nosniff',
+    'X-Frame-Options': 'DENY',
+    'Referrer-Policy': 'no-referrer',
+    'Content-Security-Policy': "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    'X-Permitted-Cross-Domain-Policies': 'none',
+    'Permissions-Policy': 'camera=(), microphone=(), geolocation=(self)',
+    'Cache-Control': 'no-store',
+    'Cross-Origin-Opener-Policy': 'same-origin'
+  });
+  if (req.secure || parsedAllowedOrigin.protocol === 'https:') res.set('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+  next();
+});
+app.use(express.json({ limit: '32kb', strict: true, type: 'application/json' }));
+
+function enforceRequestSafety(req, res, next) {
+  const origin = req.get('Origin');
+  if (origin && origin !== allowedOrigin) return res.status(403).json({ error: 'Request origin is not allowed.' });
+  if (req.get('Sec-Fetch-Site') === 'cross-site') return res.status(403).json({ error: 'Cross-site requests are not allowed.' });
+  if (!['GET', 'HEAD', 'OPTIONS'].includes(req.method) && req.get('Content-Type')?.split(';')[0].trim().toLowerCase() !== 'application/json') {
+    return res.status(415).json({ error: 'Requests must use application/json.' });
+  }
+  next();
+}
+
+function requestLimit({ limit, windowMs }) {
+  return (req, res, next) => {
+    const now = Date.now();
+    const key = `${req.ip || req.socket.remoteAddress || 'unknown'}:${req.baseUrl}${req.path}`;
+    const bucket = requestBuckets.get(key) || { startedAt: now, count: 0 };
+    if (now - bucket.startedAt >= windowMs) { bucket.startedAt = now; bucket.count = 0; }
+    bucket.count += 1; requestBuckets.set(key, bucket);
+    if (bucket.count > limit) {
+      res.set('Retry-After', String(Math.ceil((bucket.startedAt + windowMs - now) / 1000)));
+      return res.status(429).json({ error: 'Request rate limit exceeded.' });
+    }
+    res.set('RateLimit-Limit', String(limit));
+    res.set('RateLimit-Remaining', String(Math.max(0, limit - bucket.count)));
+    if (requestBuckets.size > 10_000) {
+      for (const [bucketKey, value] of requestBuckets) if (now - value.startedAt >= windowMs) requestBuckets.delete(bucketKey);
+    }
+    next();
+  };
+}
+
+app.use(enforceRequestSafety);
+app.use('/api', requestLimit({ limit: 180, windowMs: 60_000 }));
+app.use('/auth', requestLimit({ limit: 30, windowMs: 60_000 }));
 
 function hashToken(value) {
   return createHash('sha256').update(value).digest();
@@ -55,7 +135,14 @@ function getGuardian(request) {
 
 function getTwitchUser(req) {
   const cookie = String(req.headers.cookie || '').split(';').map((item) => item.trim()).find((item) => item.startsWith(`${sessionCookie}=`));
-  return cookie ? twitch.session(decodeURIComponent(cookie.slice(sessionCookie.length + 1))) : null;
+  if (!cookie) return null;
+  try { return twitch.session(decodeURIComponent(cookie.slice(sessionCookie.length + 1))); }
+  catch { return null; }
+}
+
+function isLoopbackRequest(req) {
+  const address = String(req.socket.remoteAddress || req.ip || '').toLowerCase();
+  return address === '::1' || address === '127.0.0.1' || address.startsWith('::ffff:127.') || address === 'localhost';
 }
 
 function writeStateChange({ incident, event, fromStatus, toStatus, actorId, details }) {
@@ -114,6 +201,14 @@ async function createSosIncident(input) {
   if ([...incidents.values()].some((item) => item.streamer_id === payload.streamer_id && ['PENDING_DISPATCH', 'DISPATCHING', 'ESCALATED'].includes(item.status))) {
     return { status: 409, body: { error: 'An active incident already exists for this streamer.' } };
   }
+  if (creatingIncidents.has(payload.streamer_id)) return { status: 409, body: { error: 'An SOS is already being processed for this streamer.' } };
+  if (incidents.size >= 2_000) {
+    const terminal = [...incidents.entries()].find(([, item]) => ['ACKNOWLEDGED', 'CANCELLED', 'FALSE_ALARM', 'RESOLVED'].includes(item.status));
+    if (terminal) incidents.delete(terminal[0]);
+    else return { status: 503, body: { error: 'Incident capacity is temporarily full.' } };
+  }
+  creatingIncidents.add(payload.streamer_id);
+  try {
   const activatedAt = Date.now();
   const synthesis = await synthesizeIncident({ audio_transcript_snippet: payload.audio_transcript_snippet, module_type: payload.module_type, location: payload.location });
   const twitchAccount = twitch.accounts.get(payload.streamer_id);
@@ -138,6 +233,9 @@ async function createSosIncident(input) {
     io.to('guardians').emit('incident_clip_ready', updated);
   });
   return { status: 201, body: { incident: { incident_id: incident.incident_id, status: incident.status, created_at: incident.created_at, source: incident.source }, streamer_cancel_token: cancelToken } };
+  } finally {
+    creatingIncidents.delete(payload.streamer_id);
+  }
 }
 
 async function markStreamerSafe(streamerId) {
@@ -156,7 +254,10 @@ const twitch = new TwitchIntegration({
   redirectUri: process.env.TWITCH_REDIRECT_URI || 'http://localhost:4000/auth/twitch/callback',
   rewardId: process.env.TWITCH_SILENT_SOS_REWARD_ID || '',
   onSos: async ({ streamer_id, source, audio_transcript_snippet }) => {
-    const location = streamerLocations.get(streamer_id) || { lat: null, lng: null, address: 'Location unavailable' };
+    const savedLocation = streamerLocations.get(streamer_id);
+    const location = savedLocation && Date.now() - savedLocation.updatedAt < 10 * 60_000
+      ? savedLocation.location
+      : { lat: null, lng: null, address: 'Location unavailable' };
     await createSosIncident({ streamer_id, location, module_type: 'FULE_PROTECT', audio_transcript_snippet, source });
   },
   onSafe: markStreamerSafe
@@ -215,12 +316,31 @@ function consumeInviteAttempt(key) {
   }
   active.push(now);
   inviteAttempts.set(key, active);
+  if (inviteAttempts.size > 10_000) {
+    for (const [attemptKey, timestamps] of inviteAttempts) {
+      const recent = timestamps.filter((time) => time > now - 60_000);
+      if (recent.length) inviteAttempts.set(attemptKey, recent);
+      else inviteAttempts.delete(attemptKey);
+    }
+  }
   return true;
 }
 
 io.use((socket, next) => {
+  const address = socket.handshake.address || 'unknown';
+  const now = Date.now();
+  const attempts = (socketAttemptsByIp.get(address) || []).filter((time) => time > now - 60_000);
+  if (attempts.length >= 60) return next(new Error('Connection rate limit exceeded'));
+  attempts.push(now); socketAttemptsByIp.set(address, attempts);
+  if (socketAttemptsByIp.size > 10_000) {
+    for (const [key, times] of socketAttemptsByIp) {
+      const recent = times.filter((time) => time > now - 60_000);
+      if (recent.length) socketAttemptsByIp.set(key, recent); else socketAttemptsByIp.delete(key);
+    }
+  }
   const token = socket.handshake.auth?.guardianToken;
   const guardian = authenticateGuardian(token);
+  if (token && !guardian) return next(new Error('Guardian session is invalid or expired'));
   if (guardian) {
     socket.data.guardianId = guardian.guardian_id;
     socket.data.guardianExpiresAt = guardian.expires_at;
@@ -232,7 +352,7 @@ io.use((socket, next) => {
 });
 
 app.get('/api/health', (_req, res) => {
-  res.json({ status: 'ok', service: 'FULE Protect API', demoMode, openaiEnabled: Boolean(process.env.OPENAI_API_KEY) });
+  res.json({ status: 'ok' });
 });
 
 app.get('/auth/twitch', (_req, res) => {
@@ -246,7 +366,7 @@ app.get('/auth/twitch/callback', async (req, res) => {
   if (req.query.error || typeof req.query.code !== 'string') return res.status(400).send('Twitch authorization was not completed.');
   try {
     const result = await twitch.finishLogin(req.query.code);
-    res.cookie(sessionCookie, result.session, { httpOnly: true, sameSite: 'lax', secure: req.secure, maxAge: 7 * 24 * 60 * 60 * 1000, path: '/' });
+    res.cookie(sessionCookie, result.session, { httpOnly: true, sameSite: 'lax', secure: parsedAllowedOrigin.protocol === 'https:', maxAge: 7 * 24 * 60 * 60 * 1000, path: '/' });
     res.redirect(allowedOrigin);
   } catch (error) { console.error('Twitch login failed:', error.message); res.status(502).send('Twitch login failed.'); }
 });
@@ -254,52 +374,58 @@ app.get('/auth/twitch/callback', async (req, res) => {
 app.get('/api/twitch/session', (req, res) => res.json({ user: getTwitchUser(req) }));
 app.post('/auth/twitch/logout', (req, res) => {
   const parsed = String(req.headers.cookie || '').split(';').map((item) => item.trim()).find((item) => item.startsWith(`${sessionCookie}=`));
-  if (parsed) twitch.logout(decodeURIComponent(parsed.slice(sessionCookie.length + 1)));
-  res.clearCookie(sessionCookie, { httpOnly: true, sameSite: 'lax', path: '/' }); res.json({ ok: true });
+  if (parsed) {
+    try {
+      const session = decodeURIComponent(parsed.slice(sessionCookie.length + 1));
+      const user = twitch.session(session);
+      twitch.logout(session);
+      if (user) streamerLocations.delete(user.id);
+    } catch { /* Ignore malformed cookie values. */ }
+  }
+  res.clearCookie(sessionCookie, { httpOnly: true, sameSite: 'lax', secure: parsedAllowedOrigin.protocol === 'https:', path: '/' }); res.json({ ok: true });
 });
 app.post('/api/streamer/location', (req, res) => {
   const streamer = getTwitchUser(req); if (!streamer) return res.status(401).json({ error: 'Twitch streamer login required.' });
   const validated = validateSosPayload({ streamer_id: streamer.id, location: req.body?.location, module_type: 'FULE_PROTECT', source: 'button' });
   if (!validated.ok) return res.status(400).json({ error: validated.error });
-  streamerLocations.set(streamer.id, validated.value.location); return res.json({ ok: true });
+  streamerLocations.delete(streamer.id);
+  streamerLocations.set(streamer.id, { location: validated.value.location, updatedAt: Date.now() });
+  while (streamerLocations.size > 2_000) streamerLocations.delete(streamerLocations.keys().next().value);
+  return res.json({ ok: true });
 });
 
-app.post('/api/guardians/verify', (req, res) => {
+app.post('/api/guardians/verify', requestLimit({ limit: 8, windowMs: 60_000 }), (req, res) => {
   const key = req.ip || req.socket.remoteAddress || 'unknown';
-  if (!consumeInviteAttempt(key)) return res.status(429).json({ error: 'Too many invite attempts. Try again in one minute.' });
+  if (!consumeInviteAttempt(key)) { res.set('Retry-After', '60'); return res.status(429).json({ error: 'Too many invite attempts. Try again in one minute.' }); }
   const verified = verifyGuardianInvite(req.body?.invite_code, { allowDemo: demoMode });
   if (!verified) return res.status(401).json({ error: 'Invalid or inactive guardian invite.' });
   return res.json(verified);
 });
 
-app.get('/api/incidents', (req, res) => {
+app.get('/api/incidents', requestLimit({ limit: 60, windowMs: 60_000 }), (req, res) => {
   const guardian = getGuardian(req);
   if (!guardian) return res.status(403).json({ error: 'Verified guardian access required.' });
   return res.json({ incidents: [...incidents.values()].map(({ streamer_id, ...incident }) => incident), guardian_id: guardian.guardian_id });
 });
 
-app.post('/api/sos', async (req, res) => {
+app.post('/api/sos', requestLimit({ limit: 6, windowMs: 60_000 }), async (req, res) => {
   const user = getTwitchUser(req);
-  if (!demoMode && (!user || req.body?.streamer_id !== user.id)) return res.status(401).json({ error: 'Sign in with the matching Twitch streamer account to trigger SOS.' });
+  const authenticatedStreamer = user && req.body?.streamer_id === user.id;
+  if (!authenticatedStreamer && !(demoMode && isLoopbackRequest(req))) return res.status(401).json({ error: 'Sign in with the matching Twitch streamer account to trigger SOS.' });
+  if (req.body?.source && req.body.source !== 'button') return res.status(400).json({ error: 'Chat and redeem incidents must come from verified Twitch EventSub events.' });
   try { const result = await createSosIncident(req.body); return res.status(result.status).json(result.body); }
   catch (error) { console.error('Could not create SOS incident:', error.message); return res.status(500).json({ error: 'Could not create incident. Please retry.' }); }
 });
 
-app.post('/api/demo/twitch-trigger', async (req, res) => {
-  if (!demoMode) return res.status(404).json({ error: 'Demo simulator is disabled.' });
-  const { action, streamer_id = 'demo-streamer', location = { lat: 12.9716, lng: 77.5946 } } = req.body || {};
-  if (action === 'chat_safe') return res.json({ ok: await markStreamerSafe(streamer_id) });
-  const source = action === 'redeem_sos' ? 'redeem' : action === 'chat_sos' ? 'chat' : null;
-  if (!source) return res.status(400).json({ error: 'action must be chat_sos, redeem_sos, or chat_safe.' });
-  try {
-    const result = await createSosIncident({ streamer_id, location, module_type: 'FULE_PROTECT', source, audio_transcript_snippet: source === 'redeem' ? 'Silent SOS channel point reward redeemed.' : 'Streamer activated SOS from verified Twitch chat.' });
-    const { streamer_cancel_token: _privateToken, ...safeBody } = result.body;
-    return res.status(result.status).json(safeBody);
-  }
-  catch (error) { return res.status(500).json({ error: 'Could not create incident.' }); }
-});
-
 io.on('connection', (socket) => {
+  const address = socket.handshake.address || 'unknown';
+  const connected = socketConnectionsByIp.get(address) || 0;
+  if (connected >= 20) { socket.disconnect(true); return; }
+  socketConnectionsByIp.set(address, connected + 1);
+  socket.on('disconnect', () => {
+    const remaining = Math.max(0, (socketConnectionsByIp.get(address) || 1) - 1);
+    if (remaining) socketConnectionsByIp.set(address, remaining); else socketConnectionsByIp.delete(address);
+  });
   if (socket.data.role === 'guardian') {
     socket.join('guardians');
     const expirationTimer = setTimeout(() => socket.disconnect(true), Math.max(0, socket.data.guardianExpiresAt - Date.now()));
@@ -308,7 +434,9 @@ io.on('connection', (socket) => {
   } else socket.join('public');
   socket.emit('fule:access', { role: socket.data.role, guardian_id: socket.data.guardianId || null });
 
-  socket.on('register_streamer', ({ incident_id, streamer_id, cancel_token } = {}) => {
+  socket.on('register_streamer', (payload = {}) => {
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload) || socket.data.streamerIncidentId) return;
+    const { incident_id, streamer_id, cancel_token } = payload;
     const incident = incidents.get(String(incident_id || ''));
     const credentials = cancelCredentials.get(String(incident_id || ''));
     if (!incident || incident.status !== 'PENDING_DISPATCH' || !credentials || credentials.streamer_id !== streamer_id || !tokenMatches(cancel_token, credentials.token_hash)) {
@@ -323,6 +451,7 @@ io.on('connection', (socket) => {
 
   socket.on('acknowledge_incident', (incidentId) => {
     if (socket.data.role !== 'guardian' || !socket.data.guardianId) return;
+    if (typeof incidentId !== 'string' || incidentId.length > 128) return;
     const current = incidents.get(String(incidentId));
     if (!current || !['PENDING_DISPATCH', 'DISPATCHING', 'ESCALATED'].includes(current.status)) return;
     clearIncidentTimers(current.incident_id);
@@ -368,4 +497,18 @@ io.on('connection', (socket) => {
 
 httpServer.listen(port, () => {
   console.log(`FULE Protect API listening on port ${port} (${demoMode ? 'demo mode' : 'verified guardian mode'})`);
+});
+
+httpServer.on('error', (error) => {
+  if (error.code === 'EADDRINUSE') console.error(`FULE backend could not bind port ${port}: another process is using it. Stop the old FULE server or set PORT in backend/.env.`);
+  else console.error('FULE backend failed to start:', error.message);
+  process.exit(1);
+});
+
+app.use((error, _req, res, _next) => {
+  if (res.headersSent) return;
+  if (error.type === 'entity.too.large') return res.status(413).json({ error: 'Request body is too large.' });
+  if (error instanceof SyntaxError) return res.status(400).json({ error: 'Malformed JSON request.' });
+  console.error('Request middleware error:', error.message);
+  return res.status(500).json({ error: 'Request could not be processed.' });
 });

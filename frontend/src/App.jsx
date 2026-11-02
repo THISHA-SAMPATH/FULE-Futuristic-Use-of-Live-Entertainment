@@ -46,7 +46,10 @@ export default function App() {
     setError(''); setSending(true);
     try {
       const position = await new Promise((resolve, reject) => navigator.geolocation.getCurrentPosition(resolve, reject, { enableHighAccuracy: true, timeout: 12000, maximumAge: 0 }));
-      const response = await fetch(`${API_URL}/api/sos`, { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ streamer_id: twitchUser.id, location: { lat: position.coords.latitude, lng: position.coords.longitude }, module_type: 'FULE_PROTECT', source: 'button' }) });
+      const location = { lat: position.coords.latitude, lng: position.coords.longitude };
+      const locationResponse = await fetch(`${API_URL}/api/streamer/location`, { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ location }) });
+      if (!locationResponse.ok) throw new Error('Secure location update failed.');
+      const response = await fetch(`${API_URL}/api/sos`, { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ streamer_id: twitchUser.id, location, module_type: 'FULE_PROTECT', source: 'button' }) });
       const result = await response.json(); if (!response.ok) throw new Error(result.error || 'SOS could not be sent.');
       const socket = io(API_URL, { transports: ['websocket', 'polling'] }); streamerSocketRef.current?.disconnect(); streamerSocketRef.current = socket;
       socket.on('connect', () => socket.emit('register_streamer', { incident_id: result.incident.incident_id, streamer_id: twitchUser.id, cancel_token: result.streamer_cancel_token }));

@@ -39,6 +39,13 @@ export function createStreamerRateLimiter({ limit = 3, windowMs = 5 * 60 * 1000 
     }
     active.push(now);
     requestsByStreamer.set(streamerId, active);
+    if (requestsByStreamer.size > 10_000) {
+      for (const [key, timestamps] of requestsByStreamer) {
+        const recent = timestamps.filter((timestamp) => timestamp > now - windowMs);
+        if (recent.length) requestsByStreamer.set(key, recent);
+        else requestsByStreamer.delete(key);
+      }
+    }
     return { allowed: true, remaining: limit - active.length };
   };
 }

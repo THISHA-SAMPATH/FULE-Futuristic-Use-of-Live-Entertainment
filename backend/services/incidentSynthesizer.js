@@ -43,7 +43,7 @@ export function deterministicFallback({ audio_transcript_snippet = '', module_ty
 }
 
 export async function synthesizeIncident(input, options = {}) {
-  const demoMode = options.demoMode ?? (process.env.DEMO_MODE !== 'false');
+  const demoMode = options.demoMode ?? (process.env.DEMO_MODE === 'true');
   const client = options.client === undefined ? getClient() : options.client;
   const fallback = deterministicFallback(input);
   if (demoMode || !client) return fallback;
@@ -64,7 +64,7 @@ export async function synthesizeIncident(input, options = {}) {
       recommended_action: String(result.recommended_action || fallback.recommended_action).slice(0, 120)
     };
   } catch (error) {
-    console.error('Incident synthesis failed; using deterministic fallback:', error.message);
+    console.error('Incident synthesis failed; using deterministic fallback.');
     return fallback;
   }
 }

@@ -37,7 +37,16 @@ export default function GuardianDashboard({ search = '', onIncidentsChange, onRo
     const socket = io(API_URL, { transports: ['websocket', 'polling'], auth: { guardianToken } }); socketRef.current = socket;
     socket.on('connect', () => { connectionState('online'); setLoadError(''); });
     socket.on('disconnect', () => connectionState('offline'));
-    socket.on('connect_error', () => { connectionState('offline'); setLoadError('Live alert connection failed. Reconnecting…'); });
+    socket.on('connect_error', (error) => {
+      connectionState('offline');
+      if (guardianToken && error.message?.includes('Guardian session')) {
+        sessionStorage.removeItem('fuleGuardianToken');
+        accessRole('public');
+        setGuardianToken('');
+        setLoading(false);
+        setLoadError('Guardian session expired. Verify your invite again.');
+      } else setLoadError('Live alert connection failed. Reconnecting…');
+    });
     socket.on('fule:access', ({ role: nextRole }) => {
       accessRole(nextRole);
       if (nextRole !== 'guardian' || !guardianToken) { setLoading(false); return; }

@@ -14,7 +14,12 @@ export class TwitchIntegration {
   }
 
   configured() { return Boolean(this.clientId && this.clientSecret && this.redirectUri); }
-  createState() { const state = randomBytes(24).toString('hex'); this.states.set(state, Date.now() + 10 * 60_000); return state; }
+  createState() {
+    const now = Date.now();
+    for (const [key, expiresAt] of this.states) if (expiresAt <= now) this.states.delete(key);
+    if (this.states.size >= 10_000) throw new Error('Too many pending Twitch authorization attempts');
+    const state = randomBytes(24).toString('hex'); this.states.set(state, now + 10 * 60_000); return state;
+  }
   consumeState(value) {
     const expires = this.states.get(value); this.states.delete(value);
     return Boolean(expires && expires > Date.now());
@@ -39,14 +44,19 @@ export class TwitchIntegration {
     if (!who.ok || !user) throw new Error('Unable to identify Twitch streamer');
     const session = randomBytes(32).toString('base64url');
     // Keep only Twitch identity and credentials required for chat, redemptions and clip capture; memory only.
-    this.accounts.set(user.id, { id: user.id, login: user.login, displayName: user.display_name, accessToken: token.access_token, refreshToken: token.refresh_token, expiresAt: Date.now() + token.expires_in * 1000, scopes: token.scope || [] });
-    this.sessions.set(session, user.id);
+    this.accounts.set(user.id, { id: user.id, login: user.login, accessToken: token.access_token, refreshToken: token.refresh_token, expiresAt: Date.now() + token.expires_in * 1000 });
+    this.sessions.set(session, { userId: user.id, expiresAt: Date.now() + 7 * 24 * 60 * 60 * 1000 });
     try { await this.connectEvents(this.accounts.get(user.id)); }
     catch (error) { console.error('Could not start Twitch EventSub connection:', error.message); }
-    return { session, user: { id: user.id, login: user.login, display_name: user.display_name } };
+    return { session, user: { id: user.id, login: user.login } };
   }
-  session(sessionId) { const id = this.sessions.get(sessionId); const account = id && this.accounts.get(id); return account ? { id: account.id, login: account.login, display_name: account.displayName } : null; }
-  logout(sessionId) { const id = this.sessions.get(sessionId); this.sessions.delete(sessionId); if (id) { const ws = this.connections.get(id); ws?.close(); this.connections.delete(id); this.accounts.delete(id); } }
+  session(sessionId) {
+    const stored = this.sessions.get(sessionId);
+    if (!stored || stored.expiresAt <= Date.now()) { this.sessions.delete(sessionId); return null; }
+    const account = this.accounts.get(stored.userId);
+    return account ? { id: account.id, login: account.login } : null;
+  }
+  logout(sessionId) { const stored = this.sessions.get(sessionId); this.sessions.delete(sessionId); if (stored) { const otherSession = [...this.sessions.values()].some((session) => session.userId === stored.userId && session.expiresAt > Date.now()); if (!otherSession) { const ws = this.connections.get(stored.userId); ws?.close(); this.connections.delete(stored.userId); this.accounts.delete(stored.userId); } } }
   async ensureToken(account) {
     if (account.expiresAt > Date.now() + 60_000) return account.accessToken;
     const response = await this.fetchImpl(`${AUTH}/token`, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ client_id: this.clientId, client_secret: this.clientSecret, grant_type: 'refresh_token', refresh_token: account.refreshToken }) });

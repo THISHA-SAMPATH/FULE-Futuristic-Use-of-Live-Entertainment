@@ -33,6 +33,13 @@ npm run dev
 
 Open [http://localhost:5173](http://localhost:5173). The backend listens on port 4000. Demo mode uses a deterministic summary and an offline stream stage; external Twitch or OpenAI access is optional.
 
+The development server uses strict ports so it reports conflicts instead of silently moving the frontend to a port rejected by the backend origin policy. If a previous FULE run is still listening, inspect and stop only the stale FULE PIDs in PowerShell:
+
+```powershell
+Get-NetTCPConnection -State Listen -LocalPort 4000,5173 | Select-Object LocalPort,OwningProcess
+Stop-Process -Id <PID> -Force
+```
+
 The demo guardian invite code in `.env.example` is for local demonstration only. Enter it in the dashboard's **Verify guardian invite** control. The code is hashed into `backend/data/guardians.json`; the raw value is never written there.
 
 ## Twitch integration setup

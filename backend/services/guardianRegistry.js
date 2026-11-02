@@ -53,6 +53,10 @@ export function verifyGuardianInvite(inviteCode, { allowDemo = false } = {}) {
   const accessToken = randomBytes(32).toString('base64url');
   const expiresAt = Date.now() + SESSION_TTL_MS;
   sessions.set(accessToken, { guardian_id: guardian.guardian_id, expires_at: expiresAt });
+  if (sessions.size > 10_000) {
+    const now = Date.now();
+    for (const [token, session] of sessions) if (session.expires_at <= now) sessions.delete(token);
+  }
   return { guardian_id: guardian.guardian_id, access_token: accessToken, expires_at: new Date(expiresAt).toISOString() };
 }
 
