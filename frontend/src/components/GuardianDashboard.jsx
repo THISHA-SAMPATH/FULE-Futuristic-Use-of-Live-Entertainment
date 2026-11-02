@@ -23,20 +23,36 @@ export default function GuardianDashboard({ search = '' }) {
     socketRef.current = socket;
     socket.on('connect', () => setConnection('online'));
     socket.on('disconnect', () => setConnection('offline'));
-    socket.on('fule:access', ({ role: accessRole }) => { roleRef.current = accessRole; setRole(accessRole); });
-    socket.on('sos:alert', (incident) => {
+    socket.on('fule:access', ({ role: accessRole }) => {
+      roleRef.current = accessRole;
+      setRole(accessRole);
+      if (accessRole === 'guardian' && guardianToken) {
+        fetch(`${API_URL}/api/incidents`, { headers: { Authorization: `Bearer ${guardianToken}` } })
+          .then((response) => response.ok ? response.json() : null)
+          .then((data) => { if (data?.incidents) setAlerts(data.incidents); })
+          .catch(() => {});
+      }
+    });
+    socket.on('sos_activated', (incident) => {
       if (isIncident(incident)) setAlerts((current) => [incident, ...current.filter((item) => item.incident_id !== incident.incident_id)].slice(0, 8));
     });
     socket.on('incident:public', (incident) => {
       if (roleRef.current !== 'guardian' && isIncident(incident)) setAlerts((current) => [incident, ...current.filter((item) => item.incident_id !== incident.incident_id)].slice(0, 8));
     });
-    socket.on('incident:acknowledged', (incident) => {
+    socket.on('incident_acknowledged', (incident) => {
       if (!isIncident(incident)) return;
       setAcknowledged((current) => ({ ...current, [incident.incident_id]: true }));
       setAlerts((current) => current.map((item) => item.incident_id === incident.incident_id ? incident : item));
     });
+    for (const event of ['incident_dispatch_ready', 'incident_escalated', 'sos_cancelled']) {
+      socket.on(event, (incident) => {
+        if (isIncident(incident)) setAlerts((current) => current.map((item) => item.incident_id === incident.incident_id ? incident : item));
+      });
+    }
     socket.on('incident:public:update', (update) => {
-      setAlerts((current) => current.map((item) => item.incident_id === update.incident_id ? { ...item, status: update.status } : item));
+      setAlerts((current) => current.map((item) => item.incident_id === update.incident_id
+        ? { ...item, status: update.status, escalated: update.escalated ?? item.escalated, escalation_flag: update.escalation_flag ?? item.escalation_flag }
+        : item));
     });
     return () => socket.disconnect();
   }, [guardianToken]);
@@ -48,14 +64,24 @@ export default function GuardianDashboard({ search = '' }) {
       .some((value) => String(value || '').toLowerCase().includes(query)));
   }, [alerts, search]);
 
-  function connectGuardian(event) {
+  async function connectGuardian(event) {
     event.preventDefault();
-    const nextToken = tokenDraft.trim();
-    if (!nextToken) return;
-    sessionStorage.setItem('fuleGuardianToken', nextToken);
-    setGuardianToken(nextToken);
-    setTokenDraft('');
-    setShowTokenForm(false);
+    const inviteCode = tokenDraft.trim();
+    if (!inviteCode) return;
+    try {
+      const response = await fetch(`${API_URL}/api/guardians/verify`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ invite_code: inviteCode })
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || 'Invite verification failed.');
+      sessionStorage.setItem('fuleGuardianToken', result.access_token);
+      setGuardianToken(result.access_token);
+      setTokenDraft('');
+      setShowTokenForm(false);
+    } catch (error) {
+      setTokenDraft('');
+      window.alert(error.message);
+    }
   }
 
   function disconnectGuardian() {
@@ -66,7 +92,7 @@ export default function GuardianDashboard({ search = '' }) {
   }
 
   function acknowledge(incidentId) {
-    if (role === 'guardian') socketRef.current?.emit('incident:acknowledge', incidentId);
+    if (role === 'guardian') socketRef.current?.emit('acknowledge_incident', incidentId);
   }
 
   return (
@@ -77,10 +103,10 @@ export default function GuardianDashboard({ search = '' }) {
       </div>
 
       {role !== 'guardian' && <div className="guardian-access-note"><ShieldCheck size={14} /> Public view · precise location restricted</div>}
-      {!DEMO_MODE && role !== 'guardian' && <div className="guardian-auth-area">
-        {showTokenForm ? <form className="guardian-auth-form" onSubmit={connectGuardian}><input type="password" value={tokenDraft} onChange={(event) => setTokenDraft(event.target.value)} placeholder="Guardian access token" aria-label="Guardian access token" autoComplete="current-password" /><button type="submit">CONNECT</button></form> : <button className="guardian-auth-open" onClick={() => setShowTokenForm(true)}>Connect as verified guardian</button>}
+      {role !== 'guardian' && <div className="guardian-auth-area">
+        {showTokenForm ? <form className="guardian-auth-form" onSubmit={connectGuardian}><input type="password" value={tokenDraft} onChange={(event) => setTokenDraft(event.target.value)} placeholder="Guardian invite code" aria-label="Guardian invite code" autoComplete="current-password" /><button type="submit">VERIFY</button></form> : <button className="guardian-auth-open" onClick={() => setShowTokenForm(true)}>Verify guardian invite</button>}
       </div>}
-      {role === 'guardian' && guardianToken && !DEMO_MODE && <button className="guardian-disconnect" onClick={disconnectGuardian}>Disconnect guardian access</button>}
+      {role === 'guardian' && guardianToken && <button className="guardian-disconnect" onClick={disconnectGuardian}>Disconnect guardian access</button>}
 
       <div className="alarm-summary"><span className="alarm-summary-icon"><Activity size={16} /></span><span><strong>{alerts.length ? `${alerts.length} active ${alerts.length === 1 ? 'incident' : 'incidents'}` : 'Guardian watch is active'}</strong><small>{role === 'guardian' ? 'Verified guardian safety signals' : 'Public updates are anonymized'}</small></span><span className="alarm-count">{alerts.length.toString().padStart(2, '0')}</span></div>
 
@@ -95,7 +121,7 @@ export default function GuardianDashboard({ search = '' }) {
           const coordText = isPrecise ? `${lat.toFixed(4)}, ${lng.toFixed(4)}` : coords.address;
           const mapUrl = `https://www.google.com/maps?q=${lat},${lng}`;
           const threat = alert.threat_level || 'CRITICAL';
-          const isAcknowledged = Boolean(acknowledged[alert.incident_id]) || alert.status !== 'ACTIVE';
+          const isAcknowledged = Boolean(acknowledged[alert.incident_id]) || ['ACKNOWLEDGED', 'CANCELLED', 'FALSE_ALARM', 'RESOLVED'].includes(alert.status);
           return (
             <article className="alarm-card" key={alert.incident_id}>
               <div className="alarm-card-top"><span className={`threat-badge threat-${threat.toLowerCase()}`}><i />THREAT {threat}</span><time><Clock3 size={12} />{new Date(alert.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</time></div>
@@ -103,6 +129,7 @@ export default function GuardianDashboard({ search = '' }) {
               <p className="alarm-synthesis">{alert.summary}</p>
               <div className="alarm-location-row">{isPrecise ? <a className="location-link" href={mapUrl} target="_blank" rel="noreferrer"><MapPin size={15} /><span><small>PRECISE GPS PIN</small><strong>{coordText}</strong></span><ArrowUpRight size={13} /></a> : <span className="location-link public-location"><MapPin size={15} /><span><small>APPROXIMATE LOCATION</small><strong>{coordText}</strong></span></span>}{alert.clip_url && <a className="open-feed" href={alert.clip_url} target="_blank" rel="noreferrer">OPEN CLIP <ArrowUpRight size={12} /></a>}</div>
               <div className="alarm-card-meta"><span>15-SEC AI SYNTHESIS</span><span>{alert.source.toUpperCase()} · {alert.status}</span></div>
+              {alert.escalated && <div className="escalation-note">ESCALATED · {alert.escalation_flag}</div>}
               <button className={`acknowledge-button ${isAcknowledged ? 'acknowledged' : ''}`} onClick={() => acknowledge(alert.incident_id)} disabled={isAcknowledged || role !== 'guardian'}>{role !== 'guardian' ? <><ShieldCheck size={15} /> GUARDIAN ACCESS REQUIRED</> : isAcknowledged ? <><Check size={15} /> ACKNOWLEDGED · DISPATCHING</> : <><ShieldCheck size={15} /> ACKNOWLEDGE &amp; DISPATCH</>}</button>
             </article>
           );

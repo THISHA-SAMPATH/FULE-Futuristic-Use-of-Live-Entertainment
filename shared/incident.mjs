@@ -1,19 +1,22 @@
+export const INCIDENT_MODULES = Object.freeze(['FULE_PROTECT', 'FULE_ACCOUNT', 'FULE_RESPOND']);
 export const INCIDENT_MODULE = 'FULE_PROTECT';
 export const INCIDENT_SOURCES = Object.freeze(['button', 'chat', 'redeem']);
 export const THREAT_LEVELS = Object.freeze(['LOW', 'ELEVATED', 'HIGH', 'CRITICAL']);
-export const INCIDENT_STATUSES = Object.freeze(['ACTIVE', 'ACKNOWLEDGED', 'DISPATCHED', 'RESOLVED']);
+export const INCIDENT_STATUSES = Object.freeze([
+  'PENDING_DISPATCH', 'DISPATCHING', 'ACKNOWLEDGED', 'CANCELLED', 'FALSE_ALARM', 'ESCALATED', 'RESOLVED'
+]);
 
 export const INCIDENT_SCHEMA = Object.freeze({
   type: 'object',
   additionalProperties: false,
   required: [
     'incident_id', 'threat_level', 'module', 'location', 'summary',
-    'recommended_action', 'status', 'created_at', 'acknowledged_by', 'clip_url', 'source'
+    'recommended_action', 'status', 'created_at', 'acknowledged_by', 'clip_url', 'source', 'escalated', 'escalation_flag'
   ],
   properties: {
     incident_id: { type: 'string' },
     threat_level: { type: 'string', enum: [...THREAT_LEVELS] },
-    module: { type: 'string', enum: [INCIDENT_MODULE] },
+    module: { type: 'string', enum: [...INCIDENT_MODULES] },
     location: {
       type: 'object', additionalProperties: false,
       required: ['lat', 'lng', 'address'],
@@ -29,7 +32,9 @@ export const INCIDENT_SCHEMA = Object.freeze({
     created_at: { type: 'string' },
     acknowledged_by: { type: ['string', 'null'] },
     clip_url: { type: ['string', 'null'] },
-    source: { type: 'string', enum: [...INCIDENT_SOURCES] }
+    source: { type: 'string', enum: [...INCIDENT_SOURCES] },
+    escalated: { type: 'boolean' },
+    escalation_flag: { type: ['string', 'null'] }
   }
 });
 
@@ -44,17 +49,20 @@ export function createIncident({
   created_at = new Date().toISOString(),
   acknowledged_by = null,
   clip_url = null,
-  source = 'button'
+  source = 'button',
+  escalated = false,
+  escalation_flag = null
 }) {
   const lat = Number(location?.lat);
   const lng = Number(location?.lng);
   const safeThreat = THREAT_LEVELS.includes(threat_level) ? threat_level : 'CRITICAL';
   const safeSource = INCIDENT_SOURCES.includes(source) ? source : 'button';
-  const safeStatus = INCIDENT_STATUSES.includes(status) ? status : 'ACTIVE';
+  const safeStatus = INCIDENT_STATUSES.includes(status) ? status : 'PENDING_DISPATCH';
+  const safeModule = INCIDENT_MODULES.includes(module) ? module : INCIDENT_MODULE;
   return {
     incident_id: String(incident_id || `incident-${Date.now()}`),
     threat_level: safeThreat,
-    module: INCIDENT_MODULE,
+    module: safeModule,
     location: {
       lat,
       lng,
@@ -66,7 +74,9 @@ export function createIncident({
     created_at: created_at || new Date().toISOString(),
     acknowledged_by: acknowledged_by == null ? null : String(acknowledged_by).slice(0, 120),
     clip_url: typeof clip_url === 'string' && clip_url ? clip_url.slice(0, 1000) : null,
-    source: safeSource
+    source: safeSource,
+    escalated: Boolean(escalated),
+    escalation_flag: escalation_flag == null ? null : String(escalation_flag).slice(0, 160)
   };
 }
 
@@ -82,7 +92,8 @@ export function toPublicIncident(incident) {
     summary: 'Safety incident in progress. Precise location and live details are restricted to guardians.',
     recommended_action: 'Await guardian response',
     acknowledged_by: null,
-    clip_url: null
+    clip_url: null,
+    escalation_flag: incident.escalation_flag
   };
 }
 
@@ -103,5 +114,7 @@ export function isIncident(value) {
     && typeof value.created_at === 'string'
     && (typeof value.acknowledged_by === 'string' || value.acknowledged_by === null)
     && (typeof value.clip_url === 'string' || value.clip_url === null)
-    && INCIDENT_SOURCES.includes(value.source);
+    && INCIDENT_SOURCES.includes(value.source)
+    && typeof value.escalated === 'boolean'
+    && (typeof value.escalation_flag === 'string' || value.escalation_flag === null);
 }

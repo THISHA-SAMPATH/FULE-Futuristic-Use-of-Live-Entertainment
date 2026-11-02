@@ -1,28 +1,28 @@
 # FULE Protect
 
-FULE (Futuristic Use of Live Entertainment) is a Twitch centered women's safety and civic guardian network. FULE Protect is the primary MVP: a streamer triggers an SOS, connected guardians receive a structured incident in real time, and a moderator acknowledges dispatch.
+FULE is a Twitch centered women's safety and civic guardian network. FULE Protect is the primary MVP: a streamer activates an SOS, guardians receive a structured incident, and the streamer has 10 seconds to cancel or mark a false alarm before dispatch readiness.
 
-> **Hackathon demo only.** GPS, transcript, and chat context can be simulated. The app does not contact emergency services, verify a person's identity, or provide professional safety advice. Do not rely on this prototype in a real emergency.
+> **Hackathon demo only.** The app does not contact emergency services. “Contact emergency services (112)” is an escalation reminder for guardians. Do not rely on this prototype in a real emergency.
 
 ## Architecture
 
 ```text
-React + Vite ── POST /api/sos ──▶ Express + OpenAI summary (or demo fallback)
-     │                                      │
-     │ Twitch player                        ├── Socket.IO guardians room: exact location
-     │                                      └── Socket.IO public room: coarse/redacted event
-     └── Guardian dashboard ◀──── Socket.IO incident + acknowledgement
+React + Vite ── POST /api/sos ──▶ Express ──▶ OpenAI structured synthesis
+     │                               │            └── deterministic demo/offline fallback
+     │                               ├── verified guardians room: exact incident
+     │                               └── public room: coarse, redacted incident
+     └── streamer cancel token ── Socket.IO false_alarm / cancel_sos
 
-shared/incident.mjs: incident schema, normalizer, validator, public redaction
+shared/incident.mjs: schema, normalizer, validator, public redaction
+backend/data/guardians.json: hashed invite-code registry (ignored by git)
+backend/data/audit.jsonl: append-only state-change log (ignored by git)
 ```
 
-The shared incident contract is in [`shared/incident.mjs`](shared/incident.mjs). Guardian events include precise coordinates. Public events use rounded coordinates, a generic summary, and no clip URL. In local demo mode, only a loopback frontend origin can join the guardian room. With demo mode disabled, a guardian must provide `FULE_GUARDIAN_TOKEN` through the dashboard's session-only access form.
+Precise coordinates are only sent to verified guardian sockets and the initiating streamer. Public clients receive rounded coordinates, a generic summary, and no clip URL. Guardians verify with an invite code; the API returns a short-lived session token. SOS cancellation credentials are random, returned only to the requesting streamer, and required to register the streamer socket.
 
 ## Quickstart
 
-Requirements: Node.js 18+ and npm.
-
-From the repository root in PowerShell:
+Requirements: Node.js 18+ and npm. From the repository root in PowerShell:
 
 ```powershell
 npm run install:all
@@ -31,43 +31,59 @@ Copy-Item frontend/.env.example frontend/.env
 npm run dev
 ```
 
-Open [http://localhost:5173](http://localhost:5173). The backend listens on port 4000. Demo mode uses a local offline stream-stage fallback and deterministic incident summary, so an OpenAI key and Twitch connection are not required.
+Open [http://localhost:5173](http://localhost:5173). The backend listens on port 4000. Demo mode uses a deterministic summary and an offline stream stage; external Twitch or OpenAI access is optional.
 
-To show a Twitch channel, set `VITE_DEMO_MODE=false` and `VITE_TWITCH_CHANNEL=your_channel_name` in `frontend/.env`. The embed's `parent` is read from `window.location.hostname`. Set `VITE_API_URL` to the backend origin if it is not `http://localhost:4000`.
+The demo guardian invite code in `.env.example` is for local demonstration only. Enter it in the dashboard's **Verify guardian invite** control. The code is hashed into `backend/data/guardians.json`; the raw value is never written there.
 
-## 60-second demo script
+To connect the Twitch player, set `VITE_DEMO_MODE=false` and `VITE_TWITCH_CHANNEL=your_channel_name` in `frontend/.env`. The player `parent` is read from `window.location.hostname`. To enable OpenAI synthesis, set `OPENAI_API_KEY` in `backend/.env` and set `DEMO_MODE=false`. Without credentials or on API failure, a keyword-based deterministic fallback is used.
 
-1. **0–10 sec:** Open the dashboard and point out FULE Protect, the community channels, and the live guardian status.
-2. **10–20 sec:** Expand **EDIT SIMULATED INCIDENT CONTEXT** and enter a short transcript or chat message.
-3. **20–30 sec:** Use **START LIVE SOS STREAM** in the header or **TRIGGER SOS NOW** in the fixed banner.
-4. **30–45 sec:** Show the pulsing broadcast stage and the guardian alarm: threat level, 15-second synthesis, precise GPS pin, and suggested action.
-5. **45–60 sec:** Select **ACKNOWLEDGE & DISPATCH**. The incident changes to acknowledged for guardians; public subscribers only receive a coarse, redacted notice.
+## 60-second demo
 
-## Environment
+1. **0–10 sec:** Open the dashboard and verify a guardian with the demo invite code.
+2. **10–20 sec:** Edit the simulated audio transcript to include an urgent phrase such as “someone is following me, please help”.
+3. **20–30 sec:** Click **START LIVE SOS STREAM**. The app creates the incident, emits `sos_activated` to verified guardians, and opens the 10-second cancel window.
+4. **30–45 sec:** Show the alarm summary and precise guardian map pin. The shared incident contains the threat, module, location, action, source, and status.
+5. **45–60 sec:** Click **ACKNOWLEDGE & DISPATCH**, or before the grace timer ends, use **FALSE ALARM** / **CANCEL SOS** as the initiating streamer. The audit log records the state change.
 
-Copy root `.env.example` to `backend/.env`. It lists `TWITCH_CLIENT_ID`, `TWITCH_CLIENT_SECRET`, `TWITCH_BOT_TOKEN`, `OPENAI_API_KEY`, `DEMO_MODE`, `FRONTEND_ORIGIN`, and the optional guardian token. Twitch credentials are reserved for a future EventSub/chat integration; the current Twitch feature is the player embed. Never put secrets in frontend `VITE_` variables.
+## API and events
 
-Copy `frontend/.env.example` to `frontend/.env` for public frontend settings:
-
-- `VITE_API_URL` — backend origin
-- `VITE_TWITCH_CHANNEL` — Twitch channel slug for embed mode
-- `VITE_DEMO_MODE` — defaults to `true`, selecting the offline local preview
-
-## Incident API
-
-`POST http://localhost:4000/api/sos`
+### `POST /api/sos`
 
 ```json
 {
-  "latitude": 12.9716,
-  "longitude": 77.5946,
-  "victimStatus": "Requesting guardian response",
-  "audioTranscript": "I do not feel safe. Please help.",
-  "chatLog": "viewer1: mods please check in",
+  "streamer_id": "streamer-demo-1",
+  "location": { "lat": 12.9716, "lng": 77.5946 },
+  "module_type": "FULE_PROTECT",
+  "audio_transcript_snippet": "Someone is following me, please help.",
   "source": "button"
 }
 ```
 
-The response contains a normalized `incident` object with `incident_id`, `threat_level`, `module`, `location` (`lat`, `lng`, `address`), `summary`, `recommended_action`, `status`, `created_at`, `acknowledged_by`, `clip_url`, and `source`. Valid sources are `button`, `chat`, and `redeem`.
+Valid module types: `FULE_PROTECT`, `FULE_ACCOUNT`, `FULE_RESPOND`. Valid sources: `button`, `chat`, `redeem`. The API allows at most three SOS activations per streamer in a rolling five-minute window. It returns `{ "incident": ..., "streamer_cancel_token": "..." }`; the cancel token is private to the requesting streamer.
 
-`DEMO_MODE=true` is the default. `OPENAI_API_KEY` enables the OpenAI Responses summary; absent credentials or an API error uses the local fallback. The Twitch embed is optional. Socket.IO clients outside the local demo guardian connection receive only the anonymized public projection.
+### Guardian verification and incident history
+
+- `POST /api/guardians/verify` with `{ "invite_code": "..." }` returns `{ guardian_id, access_token, expires_at }`.
+- `GET /api/incidents` requires `Authorization: Bearer <access_token>` and returns full incidents.
+- `acknowledge_incident` is accepted only from a verified guardian. The server sets `acknowledged_by` from the guardian registry identity, then sends `incident_acknowledged` to guardians.
+- `false_alarm` and `cancel_sos` require a streamer socket registered with the incident's private cancellation token and are accepted only during the first 10 seconds.
+- After the grace period, dispatch becomes ready. If no guardian acknowledges within 30 seconds of SOS activation (including the grace period), the server sets `escalated: true`, adds the emergency-services reminder, audits the transition, and emits `incident_escalated`.
+- Public room events use the redacted incident projection; exact location is never sent to that room.
+
+### Create a verified guardian invite
+
+From `backend/`:
+
+```powershell
+npm run create:guardian -- guardian-123
+```
+
+The generated code is printed once; only its SHA-256 hash is stored in the registry. Keep the code private.
+
+## Tests
+
+```powershell
+npm --prefix backend test
+```
+
+Tests cover SOS validation, per-streamer rate limits, demo fallback, and OpenAI-error fallback.

@@ -1,10 +1,12 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
+import { io } from 'socket.io-client';
 import {
   Activity, BadgeCheck, BookOpenCheck, ChevronDown, ClipboardList, Crosshair,
   HeartPulse, House, MapPinned, Radio, Search, Shield, ShieldAlert, Siren
 } from 'lucide-react';
 import GuardianDashboard from './components/GuardianDashboard.jsx';
 import './App.css';
+import './panic.css';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:4000';
 const TWITCH_CHANNEL = (import.meta.env.VITE_TWITCH_CHANNEL || '').trim();
@@ -39,35 +41,82 @@ export default function App() {
   const [search, setSearch] = useState('');
   const [activeCategory, setActiveCategory] = useState(CATEGORIES[0]);
   const [activeNavigation, setActiveNavigation] = useState('Home');
+  const [streamerId] = useState(() => {
+    const existing = sessionStorage.getItem('fuleStreamerId');
+    if (existing) return existing;
+    const generated = `streamer-${crypto.randomUUID()}`;
+    sessionStorage.setItem('fuleStreamerId', generated);
+    return generated;
+  });
+  const [activeIncident, setActiveIncident] = useState(null);
+  const streamerSocketRef = useRef(null);
+  const incidentInProgress = activeIncident && ['PENDING_DISPATCH', 'DISPATCHING', 'ESCALATED'].includes(activeIncident.status);
 
   async function triggerSos() {
-    if (sending) return;
+    if (sending || incidentInProgress) return;
     setSending(true);
     setStatus('Sending emergency alert…');
     const location = gpsEnabled
-      ? { latitude: 12.9716, longitude: 77.5946 }
-      : { latitude: 37.7694, longitude: -122.4862 };
+      ? { lat: 12.9716, lng: 77.5946 }
+      : { lat: 37.7694, lng: -122.4862 };
     try {
       const response = await fetch(`${API_URL}/api/sos`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          ...location,
-          victimStatus: 'SOS triggered by streamer; requesting immediate guardian response.',
-          clip_url: undefined,
+          streamer_id: streamerId,
+          location,
+          module_type: 'FULE_PROTECT',
+          audio_transcript_snippet: [transcript, chatLog && `Twitch chat: ${chatLog}`].filter(Boolean).join('\n'),
           source: 'button',
-          audioTranscript: transcript,
-          chatLog
         })
       });
-      if (!response.ok) throw new Error('Alert could not be sent');
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || 'Alert could not be sent');
+      streamerSocketRef.current?.disconnect();
+      const streamerSocket = io(API_URL, { transports: ['websocket', 'polling'] });
+      streamerSocketRef.current = streamerSocket;
+      streamerSocket.on('connect', () => streamerSocket.emit('register_streamer', {
+        incident_id: result.incident.incident_id,
+        streamer_id: streamerId,
+        cancel_token: result.streamer_cancel_token
+      }));
+      streamerSocket.on('streamer_registration_failed', () => setStatus('SOS started; cancel controls could not connect.'));
+      streamerSocket.on('streamer_action_confirmed', ({ status: nextStatus }) => {
+        setActiveIncident((current) => current ? { ...current, status: nextStatus } : current);
+        setSosActive(false);
+        setStatus(nextStatus === 'FALSE_ALARM' ? 'Marked as a false alarm.' : 'SOS cancelled during the grace window.');
+      });
+      streamerSocket.on('streamer_action_rejected', ({ reason }) => {
+        setActiveIncident((current) => current ? { ...current, status: 'DISPATCHING' } : current);
+        setStatus(reason || 'Dispatch grace window ended.');
+      });
+      streamerSocket.on('incident_dispatch_ready', (incident) => {
+        setActiveIncident(incident);
+        setStatus('Dispatch grace window ended · guardians can acknowledge.');
+      });
+      streamerSocket.on('incident_acknowledged', (incident) => {
+        setActiveIncident(incident);
+        setSosActive(false);
+        setStatus(`Guardian ${incident.acknowledged_by} acknowledged the incident.`);
+      });
+      streamerSocket.on('incident_escalated', (incident) => {
+        setActiveIncident(incident);
+        setStatus(incident.escalation_flag || 'Incident escalated for emergency follow-up.');
+      });
+      setActiveIncident(result.incident);
       setSosActive(true);
-      setStatus('Alert sent · guardians notified');
+      setStatus('SOS sent · 10-second cancel window is open');
     } catch (error) {
       setStatus(`${error.message}. Is the backend running?`);
     } finally {
       setSending(false);
     }
+  }
+
+  function cancelSos(eventName) {
+    if (!activeIncident || activeIncident.status !== 'PENDING_DISPATCH') return;
+    streamerSocketRef.current?.emit(eventName, { incident_id: activeIncident.incident_id });
   }
 
   const playerUrl = TWITCH_CHANNEL && !FRONTEND_DEMO_MODE
@@ -87,7 +136,7 @@ export default function App() {
           <kbd>/</kbd>
         </label>
         <div className="top-actions">
-          <button className="start-live-button" onClick={triggerSos} disabled={sending}>
+          <button className="start-live-button" onClick={triggerSos} disabled={sending || incidentInProgress}>
             <span className="start-live-dot" />
             {sending ? 'SENDING ALERT…' : 'START LIVE SOS STREAM'}
           </button>
@@ -181,9 +230,12 @@ export default function App() {
         </main>
       </div>
 
-      <div className="panic-banner" role="region" aria-label="Emergency SOS action">
-        <div className="panic-copy"><span className="panic-shield"><ShieldAlert size={19} /></span><span><strong>Need help right now?</strong><small>{status} · sends simulated coordinates to connected guardians</small></span></div>
-        <button className="panic-button" onClick={triggerSos} disabled={sending}><Siren size={18} />{sending ? 'SENDING SOS…' : 'TRIGGER SOS NOW'}</button>
+      <div className={`panic-banner ${activeIncident?.status === 'PENDING_DISPATCH' ? 'with-cancel' : ''}`} role="region" aria-label="Emergency SOS action">
+        <div className="panic-copy"><span className="panic-shield"><ShieldAlert size={19} /></span><span><strong>Need help right now?</strong><small>{status} · 10-second grace before dispatch readiness</small></span></div>
+        <div className="panic-actions">
+          {activeIncident?.status === 'PENDING_DISPATCH' && <><button className="cancel-sos-button" onClick={() => cancelSos('false_alarm')}>FALSE ALARM</button><button className="cancel-sos-button" onClick={() => cancelSos('cancel_sos')}>CANCEL SOS</button></>}
+          <button className="panic-button" onClick={triggerSos} disabled={sending || incidentInProgress}><Siren size={18} />{sending ? 'SENDING SOS…' : incidentInProgress ? 'SOS IN PROGRESS' : 'TRIGGER SOS NOW'}</button>
+        </div>
       </div>
     </div>
   );

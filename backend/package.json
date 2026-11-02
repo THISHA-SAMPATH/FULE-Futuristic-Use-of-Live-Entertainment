@@ -5,7 +5,9 @@
   "type": "module",
   "scripts": {
     "dev": "node --watch server.js",
-    "start": "node server.js"
+    "start": "node server.js",
+    "test": "node --test",
+    "create:guardian": "node scripts/createGuardianInvite.js"
   },
   "dependencies": {
     "cors": "^2.8.5",
