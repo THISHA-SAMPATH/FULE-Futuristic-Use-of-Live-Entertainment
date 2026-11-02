@@ -7,7 +7,8 @@ import GuardianDashboard from './components/GuardianDashboard.jsx';
 import './App.css';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:4000';
-const TWITCH_CHANNEL = import.meta.env.VITE_TWITCH_CHANNEL || 'twitch';
+const TWITCH_CHANNEL = (import.meta.env.VITE_TWITCH_CHANNEL || '').trim();
+const FRONTEND_DEMO_MODE = import.meta.env.VITE_DEMO_MODE !== 'false';
 const CATEGORIES = [
   'FULE Protect: Women Safety',
   'FULE Account: Officer Decorum',
@@ -53,7 +54,8 @@ export default function App() {
         body: JSON.stringify({
           ...location,
           victimStatus: 'SOS triggered by streamer; requesting immediate guardian response.',
-          liveStreamUrl: `https://www.twitch.tv/${TWITCH_CHANNEL}`,
+          clip_url: undefined,
+          source: 'button',
           audioTranscript: transcript,
           chatLog
         })
@@ -68,7 +70,9 @@ export default function App() {
     }
   }
 
-  const playerUrl = `https://player.twitch.tv/?channel=${encodeURIComponent(TWITCH_CHANNEL)}&parent=localhost&muted=true`;
+  const playerUrl = TWITCH_CHANNEL && !FRONTEND_DEMO_MODE
+    ? `https://player.twitch.tv/?channel=${encodeURIComponent(TWITCH_CHANNEL)}&parent=${encodeURIComponent(window.location.hostname)}&muted=true`
+    : null;
 
   return (
     <div className="fule-app">
@@ -140,11 +144,11 @@ export default function App() {
             <div className="main-column">
               <section className={`stage-card ${sosActive ? 'is-live' : ''}`} aria-label="Featured Twitch stream">
                 <div className="stage-toolbar">
-                  <div className="stage-title"><span className={`stage-live-dot ${sosActive ? 'pulsing' : ''}`} /><div><strong>{sosActive ? 'LIVE EMERGENCY BROADCAST' : 'FEATURED COMMUNITY STREAM'}</strong><span>FULE Protect <span className="stage-separator">/</span> @{TWITCH_CHANNEL}</span></div></div>
+                  <div className="stage-title"><span className={`stage-live-dot ${sosActive ? 'pulsing' : ''}`} /><div><strong>{sosActive ? 'LIVE EMERGENCY BROADCAST' : 'FEATURED COMMUNITY STREAM'}</strong><span>FULE Protect <span className="stage-separator">/</span> {TWITCH_CHANNEL ? `@${TWITCH_CHANNEL}` : 'offline demo preview'}</span></div></div>
                   <div className="stage-badges"><span className="secure-badge"><Shield size={13} /> {sosActive ? 'SOS ACTIVE' : 'GUARDIAN MONITORED'}</span><span className="viewer-badge"><span /> 1.2K</span></div>
                 </div>
                 <div className="player-stage">
-                  <iframe src={playerUrl} title={`${TWITCH_CHANNEL} Twitch live stream`} allowFullScreen allow="autoplay; fullscreen" />
+                  {playerUrl ? <iframe src={playerUrl} title={`${TWITCH_CHANNEL} Twitch live stream`} allowFullScreen allow="autoplay; fullscreen" /> : <div className="offline-player"><div className="offline-player-mark"><Shield size={25} /></div><strong>FULE LIVE SAFETY PREVIEW</strong><span>Offline demo mode · no Twitch connection required</span><div className="offline-player-bars"><i /><i /><i /><i /><i /><i /><i /><i /><i /><i /><i /><i /></div></div>}
                   <div className="stage-vignette" />
                   {sosActive && <div className="broadcast-banner"><span className="banner-pulse" /> LIVE EMERGENCY BROADCAST <span>GUARDIANS ALERTED</span></div>}
                   <div className="gps-telemetry"><MapPinned size={15} /><span><strong>GPS TELEMETRY</strong><small>{gpsEnabled ? '12.9716, 77.5946 · Bengaluru' : '37.7694, −122.4862 · San Francisco'}</small></span><span className="telemetry-target"><Crosshair size={17} /></span></div>

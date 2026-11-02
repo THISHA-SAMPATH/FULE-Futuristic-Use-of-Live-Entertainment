@@ -1,107 +1,73 @@
 # FULE Protect
 
-FULE (Futuristic Use of Live Entertainment) Protect is a Codex x TwitchCon hackathon MVP for community-powered safety during Twitch streams. A streamer can send a simulated SOS with location and stream context; connected guardians receive the alert over Socket.IO, review a structured 15-second incident summary, open the map pin, and acknowledge dispatch. The UI embeds a Twitch player and lets you edit simulated transcript and chat context.
+FULE (Futuristic Use of Live Entertainment) is a Twitch centered women's safety and civic guardian network. FULE Protect is the primary MVP: a streamer triggers an SOS, connected guardians receive a structured incident in real time, and a moderator acknowledges dispatch.
 
-> **Demo only:** GPS, transcript, and chat are simulated. This local app does not contact emergency services, verify responders, encrypt the stream, preserve evidence, or provide professional safety advice. Do not rely on it in a real emergency. If `OPENAI_API_KEY` is configured, transcript/chat text is sent to the OpenAI API to produce a summary; otherwise the app uses a local fallback.
+> **Hackathon demo only.** GPS, transcript, and chat context can be simulated. The app does not contact emergency services, verify a person's identity, or provide professional safety advice. Do not rely on this prototype in a real emergency.
 
 ## Architecture
 
 ```text
-┌──────────────────────────┐       POST /api/sos        ┌──────────────────────────┐
-│ React + Vite streamer UI │ ─────────────────────────▶ │ Express API              │
-│ Twitch embed · SOS · GPS │                            │ validate · summarize     │
-└────────────┬─────────────┘                            └────────────┬─────────────┘
-             │                                                       │
-             ▼                                         Socket.IO sos:alert
-       Twitch player                                               ▼
-                                                   ┌──────────────────────────┐
-                                                   │ Guardian Dashboard       │
-                                                   │ summary · map · dispatch │
-                                                   └──────────────────────────┘
+React + Vite ── POST /api/sos ──▶ Express + OpenAI summary (or demo fallback)
+     │                                      │
+     │ Twitch player                        ├── Socket.IO guardians room: exact location
+     │                                      └── Socket.IO public room: coarse/redacted event
+     └── Guardian dashboard ◀──── Socket.IO incident + acknowledgement
+
+shared/incident.mjs: incident schema, normalizer, validator, public redaction
 ```
 
-The backend uses the OpenAI Responses API with a strict JSON schema when `OPENAI_API_KEY` is set. The model summarizes recent transcript and chat evidence; the server supplies coordinates and enforces the SOS incident type and dispatch action. A deterministic local fallback keeps the MVP runnable without credentials. `OPENAI_MODEL` selects the model.
-
-## Architecture review: high impact next steps
-
-1. **Twitch EventSub chat context.** Subscribe to `channel.chat.message` with a broadcaster-authorized Twitch user token, buffer a rolling 15-second window, and pass that window to the incident summarizer. The current UI accepts pasted demo chat; EventSub would make that context live. See [Twitch EventSub](https://dev.twitch.tv/docs/eventsub/) and [chat authentication](https://dev.twitch.tv/docs/chat/authenticating).
-2. **Verified, tiered access.** Add Twitch OAuth, a trusted-contact allowlist, short-lived incident-scoped access, and role-based Socket.IO rooms. Guardians would receive precise location and stream access; public viewers would receive delayed, coarse, anonymized incident notices. This demo has no identity verification or tiered access control.
-3. **Consent-driven OBS response and audit trail.** Offer an opt-in OBS WebSocket action (such as switching to a privacy scene) plus a timestamped incident event log. Require explicit consent and test recovery behavior before enabling scene changes; do not claim evidence integrity until storage and key management are designed.
-
-## Requirements
-
-- Node.js 18 or newer
-- npm
-- Internet access for package installation, the Twitch player, and Google Fonts
+The shared incident contract is in [`shared/incident.mjs`](shared/incident.mjs). Guardian events include precise coordinates. Public events use rounded coordinates, a generic summary, and no clip URL. In local demo mode, only a loopback frontend origin can join the guardian room. With demo mode disabled, a guardian must provide `FULE_GUARDIAN_TOKEN` through the dashboard's session-only access form.
 
 ## Quickstart
 
-In PowerShell, from the repository root, install all dependencies:
+Requirements: Node.js 18+ and npm.
+
+From the repository root in PowerShell:
 
 ```powershell
 npm run install:all
-```
-
-Start the API and Vite development server together:
-
-```powershell
+Copy-Item .env.example backend/.env
+Copy-Item frontend/.env.example frontend/.env
 npm run dev
 ```
 
-Open [http://localhost:5173](http://localhost:5173). The API listens at [http://localhost:4000](http://localhost:4000). Use the SOS button to send an alert. Expand **EDIT DEMO INCIDENT CONTEXT** to edit simulated transcript/chat. A second browser tab can monitor alerts over Socket.IO.
+Open [http://localhost:5173](http://localhost:5173). The backend listens on port 4000. Demo mode uses a local offline stream-stage fallback and deterministic incident summary, so an OpenAI key and Twitch connection are not required.
 
-To use OpenAI summaries, create `backend/.env`:
+To show a Twitch channel, set `VITE_DEMO_MODE=false` and `VITE_TWITCH_CHANNEL=your_channel_name` in `frontend/.env`. The embed's `parent` is read from `window.location.hostname`. Set `VITE_API_URL` to the backend origin if it is not `http://localhost:4000`.
 
-```env
-OPENAI_API_KEY=your_api_key
-OPENAI_MODEL=gpt-4.1-mini
-```
+## 60-second demo script
 
-Keep this key on the backend; do not put it in a `VITE_` frontend variable. Without a key, the local fallback is used.
+1. **0–10 sec:** Open the dashboard and point out FULE Protect, the community channels, and the live guardian status.
+2. **10–20 sec:** Expand **EDIT SIMULATED INCIDENT CONTEXT** and enter a short transcript or chat message.
+3. **20–30 sec:** Use **START LIVE SOS STREAM** in the header or **TRIGGER SOS NOW** in the fixed banner.
+4. **30–45 sec:** Show the pulsing broadcast stage and the guardian alarm: threat level, 15-second synthesis, precise GPS pin, and suggested action.
+5. **45–60 sec:** Select **ACKNOWLEDGE & DISPATCH**. The incident changes to acknowledged for guardians; public subscribers only receive a coarse, redacted notice.
 
-### Run in separate terminals
+## Environment
 
-```powershell
-# Terminal 1 — API
-cd backend
-npm install
-npm run dev
-```
+Copy root `.env.example` to `backend/.env`. It lists `TWITCH_CLIENT_ID`, `TWITCH_CLIENT_SECRET`, `TWITCH_BOT_TOKEN`, `OPENAI_API_KEY`, `DEMO_MODE`, `FRONTEND_ORIGIN`, and the optional guardian token. Twitch credentials are reserved for a future EventSub/chat integration; the current Twitch feature is the player embed. Never put secrets in frontend `VITE_` variables.
 
-```powershell
-# Terminal 2 — web app
-cd frontend
-npm install
-npm run dev
-```
+Copy `frontend/.env.example` to `frontend/.env` for public frontend settings:
 
-## Try the API
+- `VITE_API_URL` — backend origin
+- `VITE_TWITCH_CHANNEL` — Twitch channel slug for embed mode
+- `VITE_DEMO_MODE` — defaults to `true`, selecting the offline local preview
 
-```powershell
-Invoke-RestMethod -Method Post -Uri http://localhost:4000/api/sos -ContentType 'application/json' -Body '{"latitude":12.9716,"longitude":77.5946,"victimStatus":"Requesting guardian response","liveStreamUrl":"https://www.twitch.tv/twitch","audioTranscript":"I do not feel safe. Please help.","chatLog":"viewer1: mods please check in"}'
-```
+## Incident API
 
-The API responds with `{ "ok": true, "alert": { ... } }` and broadcasts the alert as `sos:alert`. `incidentSummary` contains:
+`POST http://localhost:4000/api/sos`
 
 ```json
 {
-  "threat_level": "CRITICAL",
-  "incident_type": "Women's Safety SOS",
-  "location_coords": "12.9716, 77.5946",
-  "summary": "Immediate distress trigger registered near public transit zone.",
-  "recommended_action": "DISPATCH_COMMUNITY_MODS"
+  "latitude": 12.9716,
+  "longitude": 77.5946,
+  "victimStatus": "Requesting guardian response",
+  "audioTranscript": "I do not feel safe. Please help.",
+  "chatLog": "viewer1: mods please check in",
+  "source": "button"
 }
 ```
 
-Guardians emit `incident:acknowledge` with the incident ID; the server broadcasts `incident:acknowledged`. The example summary above illustrates the response shape; model text depends on the supplied data.
+The response contains a normalized `incident` object with `incident_id`, `threat_level`, `module`, `location` (`lat`, `lng`, `address`), `summary`, `recommended_action`, `status`, `created_at`, `acknowledged_by`, `clip_url`, and `source`. Valid sources are `button`, `chat`, and `redeem`.
 
-## Configuration
-
-Backend environment variables:
-
-- `PORT` — API port (default `4000`)
-- `FRONTEND_ORIGIN` — allowed frontend origin (default `http://localhost:5173`)
-- `OPENAI_API_KEY` — optional server-only API key; no key selects the local fallback
-- `OPENAI_MODEL` — optional model name (default `gpt-4.1-mini`)
-
-Frontend variable: `VITE_API_URL` — backend origin (default `http://localhost:4000`).
+`DEMO_MODE=true` is the default. `OPENAI_API_KEY` enables the OpenAI Responses summary; absent credentials or an API error uses the local fallback. The Twitch embed is optional. Socket.IO clients outside the local demo guardian connection receive only the anonymized public projection.

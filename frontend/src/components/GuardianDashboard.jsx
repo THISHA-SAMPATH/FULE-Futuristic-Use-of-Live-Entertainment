@@ -1,41 +1,72 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { io } from 'socket.io-client';
 import { Activity, ArrowUpRight, Check, Clock3, MapPin, Radio, ShieldCheck } from 'lucide-react';
+import { isIncident } from '../../../shared/incident.mjs';
 import './GuardianDashboard.css';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:4000';
+const DEMO_MODE = import.meta.env.VITE_DEMO_MODE !== 'false';
 
 export default function GuardianDashboard({ search = '' }) {
   const [alerts, setAlerts] = useState([]);
   const [connection, setConnection] = useState('connecting');
+  const [role, setRole] = useState('public');
   const [acknowledged, setAcknowledged] = useState({});
+  const [guardianToken, setGuardianToken] = useState(() => sessionStorage.getItem('fuleGuardianToken') || '');
+  const [tokenDraft, setTokenDraft] = useState('');
+  const [showTokenForm, setShowTokenForm] = useState(false);
   const socketRef = useRef(null);
+  const roleRef = useRef('public');
 
   useEffect(() => {
-    const socket = io(API_URL, { transports: ['websocket', 'polling'] });
+    const socket = io(API_URL, { transports: ['websocket', 'polling'], auth: { guardianToken } });
     socketRef.current = socket;
     socket.on('connect', () => setConnection('online'));
     socket.on('disconnect', () => setConnection('offline'));
-    socket.on('sos:alert', (alert) => setAlerts((current) => [alert, ...current].slice(0, 8)));
-    socket.on('incident:acknowledged', ({ incidentId }) => setAcknowledged((current) => ({ ...current, [incidentId]: true })));
+    socket.on('fule:access', ({ role: accessRole }) => { roleRef.current = accessRole; setRole(accessRole); });
+    socket.on('sos:alert', (incident) => {
+      if (isIncident(incident)) setAlerts((current) => [incident, ...current.filter((item) => item.incident_id !== incident.incident_id)].slice(0, 8));
+    });
+    socket.on('incident:public', (incident) => {
+      if (roleRef.current !== 'guardian' && isIncident(incident)) setAlerts((current) => [incident, ...current.filter((item) => item.incident_id !== incident.incident_id)].slice(0, 8));
+    });
+    socket.on('incident:acknowledged', (incident) => {
+      if (!isIncident(incident)) return;
+      setAcknowledged((current) => ({ ...current, [incident.incident_id]: true }));
+      setAlerts((current) => current.map((item) => item.incident_id === incident.incident_id ? incident : item));
+    });
+    socket.on('incident:public:update', (update) => {
+      setAlerts((current) => current.map((item) => item.incident_id === update.incident_id ? { ...item, status: update.status } : item));
+    });
     return () => socket.disconnect();
-  }, []);
+  }, [guardianToken]);
 
   const visibleAlerts = useMemo(() => {
     const query = search.trim().toLowerCase();
     if (!query) return alerts;
-    return alerts.filter((alert) => [
-      alert.incidentSummary?.summary,
-      alert.incidentSummary?.incident_type,
-      alert.incidentSummary?.location_coords,
-      alert.victimStatus,
-      alert.liveStreamUrl
-    ].some((value) => String(value || '').toLowerCase().includes(query)));
+    return alerts.filter((alert) => [alert.summary, alert.module, alert.location?.address, `${alert.location?.lat}, ${alert.location?.lng}`, alert.clip_url]
+      .some((value) => String(value || '').toLowerCase().includes(query)));
   }, [alerts, search]);
 
-  function acknowledge(id) {
-    socketRef.current?.emit('incident:acknowledge', id);
-    setAcknowledged((current) => ({ ...current, [id]: true }));
+  function connectGuardian(event) {
+    event.preventDefault();
+    const nextToken = tokenDraft.trim();
+    if (!nextToken) return;
+    sessionStorage.setItem('fuleGuardianToken', nextToken);
+    setGuardianToken(nextToken);
+    setTokenDraft('');
+    setShowTokenForm(false);
+  }
+
+  function disconnectGuardian() {
+    sessionStorage.removeItem('fuleGuardianToken');
+    setGuardianToken('');
+    setAlerts([]);
+    setAcknowledged({});
+  }
+
+  function acknowledge(incidentId) {
+    if (role === 'guardian') socketRef.current?.emit('incident:acknowledge', incidentId);
   }
 
   return (
@@ -45,33 +76,40 @@ export default function GuardianDashboard({ search = '' }) {
         <div className={`guardian-connection ${connection}`}><i />{connection === 'online' ? 'LIVE' : connection === 'offline' ? 'RECONNECTING' : 'CONNECTING'}</div>
       </div>
 
-      <div className="alarm-summary"><span className="alarm-summary-icon"><Activity size={16} /></span><span><strong>{alerts.length ? `${alerts.length} active ${alerts.length === 1 ? 'incident' : 'incidents'}` : 'Guardian watch is active'}</strong><small>Latest community safety signals</small></span><span className="alarm-count">{alerts.length.toString().padStart(2, '0')}</span></div>
+      {role !== 'guardian' && <div className="guardian-access-note"><ShieldCheck size={14} /> Public view · precise location restricted</div>}
+      {!DEMO_MODE && role !== 'guardian' && <div className="guardian-auth-area">
+        {showTokenForm ? <form className="guardian-auth-form" onSubmit={connectGuardian}><input type="password" value={tokenDraft} onChange={(event) => setTokenDraft(event.target.value)} placeholder="Guardian access token" aria-label="Guardian access token" autoComplete="current-password" /><button type="submit">CONNECT</button></form> : <button className="guardian-auth-open" onClick={() => setShowTokenForm(true)}>Connect as verified guardian</button>}
+      </div>}
+      {role === 'guardian' && guardianToken && !DEMO_MODE && <button className="guardian-disconnect" onClick={disconnectGuardian}>Disconnect guardian access</button>}
+
+      <div className="alarm-summary"><span className="alarm-summary-icon"><Activity size={16} /></span><span><strong>{alerts.length ? `${alerts.length} active ${alerts.length === 1 ? 'incident' : 'incidents'}` : 'Guardian watch is active'}</strong><small>{role === 'guardian' ? 'Verified guardian safety signals' : 'Public updates are anonymized'}</small></span><span className="alarm-count">{alerts.length.toString().padStart(2, '0')}</span></div>
 
       <div className="alarm-list" aria-live="polite">
         {visibleAlerts.length === 0 ? (
           <div className="guardian-empty"><span className="empty-shield"><ShieldCheck size={21} /></span><strong>{search && alerts.length ? 'No matching incidents' : 'All clear for now'}</strong><span>{search && alerts.length ? 'Try a different search term.' : 'New SOS alerts will appear here in real time.'}</span></div>
         ) : visibleAlerts.map((alert) => {
           const coords = alert.location || {};
-          const lat = Number(coords.latitude);
-          const lng = Number(coords.longitude);
-          const coordText = alert.incidentSummary?.location_coords || `${lat.toFixed(4)}, ${lng.toFixed(4)}`;
+          const lat = Number(coords.lat);
+          const lng = Number(coords.lng);
+          const isPrecise = role === 'guardian';
+          const coordText = isPrecise ? `${lat.toFixed(4)}, ${lng.toFixed(4)}` : coords.address;
           const mapUrl = `https://www.google.com/maps?q=${lat},${lng}`;
-          const threat = alert.incidentSummary?.threat_level || 'CRITICAL';
-          const isAcknowledged = Boolean(acknowledged[alert.id]);
+          const threat = alert.threat_level || 'CRITICAL';
+          const isAcknowledged = Boolean(acknowledged[alert.incident_id]) || alert.status !== 'ACTIVE';
           return (
-            <article className="alarm-card" key={alert.id}>
-              <div className="alarm-card-top"><span className={`threat-badge threat-${threat.toLowerCase()}`}><i />THREAT {threat}</span><time><Clock3 size={12} />{new Date(alert.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</time></div>
-              <div className="alarm-type">{alert.incidentSummary?.incident_type || "Women's Safety SOS"}</div>
-              <p className="alarm-synthesis">{alert.incidentSummary?.summary || 'SOS received. Verify safety and location immediately.'}</p>
-              <div className="alarm-location-row"><a className="location-link" href={mapUrl} target="_blank" rel="noreferrer"><MapPin size={15} /><span><small>GPS PIN</small><strong>{coordText}</strong></span><ArrowUpRight size={13} /></a>{alert.liveStreamUrl && <a className="open-feed" href={alert.liveStreamUrl} target="_blank" rel="noreferrer">OPEN FEED <ArrowUpRight size={12} /></a>}</div>
-              <div className="alarm-card-meta"><span>15-SEC AI SYNTHESIS</span><span>{alert.incidentSummary?.summary_source === 'openai' ? 'OPENAI' : 'LOCAL DEMO'}</span></div>
-              <button className={`acknowledge-button ${isAcknowledged ? 'acknowledged' : ''}`} onClick={() => acknowledge(alert.id)} disabled={isAcknowledged}>{isAcknowledged ? <><Check size={15} /> ACKNOWLEDGED · DISPATCHING</> : <><ShieldCheck size={15} /> ACKNOWLEDGE &amp; DISPATCH</>}</button>
+            <article className="alarm-card" key={alert.incident_id}>
+              <div className="alarm-card-top"><span className={`threat-badge threat-${threat.toLowerCase()}`}><i />THREAT {threat}</span><time><Clock3 size={12} />{new Date(alert.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</time></div>
+              <div className="alarm-type">{alert.module.replaceAll('_', ' ')}</div>
+              <p className="alarm-synthesis">{alert.summary}</p>
+              <div className="alarm-location-row">{isPrecise ? <a className="location-link" href={mapUrl} target="_blank" rel="noreferrer"><MapPin size={15} /><span><small>PRECISE GPS PIN</small><strong>{coordText}</strong></span><ArrowUpRight size={13} /></a> : <span className="location-link public-location"><MapPin size={15} /><span><small>APPROXIMATE LOCATION</small><strong>{coordText}</strong></span></span>}{alert.clip_url && <a className="open-feed" href={alert.clip_url} target="_blank" rel="noreferrer">OPEN CLIP <ArrowUpRight size={12} /></a>}</div>
+              <div className="alarm-card-meta"><span>15-SEC AI SYNTHESIS</span><span>{alert.source.toUpperCase()} · {alert.status}</span></div>
+              <button className={`acknowledge-button ${isAcknowledged ? 'acknowledged' : ''}`} onClick={() => acknowledge(alert.incident_id)} disabled={isAcknowledged || role !== 'guardian'}>{role !== 'guardian' ? <><ShieldCheck size={15} /> GUARDIAN ACCESS REQUIRED</> : isAcknowledged ? <><Check size={15} /> ACKNOWLEDGED · DISPATCHING</> : <><ShieldCheck size={15} /> ACKNOWLEDGE &amp; DISPATCH</>}</button>
             </article>
           );
         })}
       </div>
 
-      <div className="guardian-panel-foot"><span><i /> Secure response channel</span><span>DEMO MODE</span></div>
+      <div className="guardian-panel-foot"><span><i /> Secure response channel</span><span>{DEMO_MODE ? 'DEMO MODE' : role === 'guardian' ? 'GUARDIAN' : 'PUBLIC'}</span></div>
     </aside>
   );
 }
