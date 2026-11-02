@@ -1,10 +1,11 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { io } from 'socket.io-client';
-import { Activity, ArrowUpRight, Check, MapPin, Radio, ShieldCheck } from 'lucide-react';
+import { Activity, ArrowUpRight, Check, Clock3, MapPin, Radio, ShieldCheck } from 'lucide-react';
+import './GuardianDashboard.css';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:4000';
 
-export default function GuardianDashboard() {
+export default function GuardianDashboard({ search = '' }) {
   const [alerts, setAlerts] = useState([]);
   const [connection, setConnection] = useState('connecting');
   const [acknowledged, setAcknowledged] = useState({});
@@ -20,31 +21,57 @@ export default function GuardianDashboard() {
     return () => socket.disconnect();
   }, []);
 
+  const visibleAlerts = useMemo(() => {
+    const query = search.trim().toLowerCase();
+    if (!query) return alerts;
+    return alerts.filter((alert) => [
+      alert.incidentSummary?.summary,
+      alert.incidentSummary?.incident_type,
+      alert.incidentSummary?.location_coords,
+      alert.victimStatus,
+      alert.liveStreamUrl
+    ].some((value) => String(value || '').toLowerCase().includes(query)));
+  }, [alerts, search]);
+
   function acknowledge(id) {
     socketRef.current?.emit('incident:acknowledge', id);
     setAcknowledged((current) => ({ ...current, [id]: true }));
   }
 
   return (
-    <section className="dashboard">
-      <div className="section-title"><div><div className="eyebrow"><Radio size={14} /> GUARDIAN NETWORK</div><h2>Safety command</h2></div><div className={`connection ${connection}`}><span /> {connection === 'online' ? 'CONNECTED' : connection === 'offline' ? 'RECONNECTING' : 'CONNECTING'}</div></div>
-      <div className="dashboard-grid">
-        <div className="incident-list">
-          <div className="panel-heading"><div><span className="panel-kicker">LIVE INCIDENTS</span><h3>Incoming alerts <span className="count-badge">{alerts.length}</span></h3></div><span className="sort-label"><Activity size={13} /> MOST RECENT</span></div>
-          {alerts.length === 0 ? <div className="empty-state"><div className="empty-symbol"><ShieldCheck size={22} /></div><strong>All clear for now</strong><span>New SOS alerts will appear here instantly.</span></div> : alerts.map((alert) => {
-            const coords = alert.location || {};
-            const mapUrl = `https://www.google.com/maps?q=${coords.latitude},${coords.longitude}`;
-            return <article className="incident-card" key={alert.id}>
-              <div className="incident-top"><span className="critical-pill"><i /> CRITICAL</span><time>{new Date(alert.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</time></div>
-              <p className="incident-summary">{alert.incidentSummary?.summary || 'SOS received. Verify safety and location.'}</p>
-              <p className="victim-status">{alert.victimStatus}</p>
-              <div className="incident-meta"><a href={mapUrl} target="_blank" rel="noreferrer"><MapPin size={14} /> {Number(coords.latitude).toFixed(4)}, {Number(coords.longitude).toFixed(4)} <ArrowUpRight size={12} /></a>{alert.liveStreamUrl && <a href={alert.liveStreamUrl} target="_blank" rel="noreferrer">OPEN STREAM <ArrowUpRight size={12} /></a>}</div>
-              <button className={`dispatch-button ${acknowledged[alert.id] ? 'dispatched' : ''}`} onClick={() => acknowledge(alert.id)} disabled={acknowledged[alert.id]}>{acknowledged[alert.id] ? <><Check size={16} /> ACKNOWLEDGED — DISPATCH IN PROGRESS</> : <><ShieldCheck size={16} /> ACKNOWLEDGE &amp; DISPATCH</>}</button>
-            </article>;
-          })}
-        </div>
-        <aside className="response-panel"><div className="panel-kicker">RESPONSE PROTOCOL</div><h3>Every second<br />matters.</h3><p>When an SOS arrives, connect with the person, confirm their location, then coordinate with local emergency services as appropriate.</p><div className="protocol-step"><span>01</span><div><b>ACKNOWLEDGE</b><small>Let the person know help is here</small></div></div><div className="protocol-step"><span>02</span><div><b>VERIFY LOCATION</b><small>Open the shared map pin</small></div></div><div className="protocol-step"><span>03</span><div><b>COORDINATE HELP</b><small>Use local emergency resources</small></div></div><div className="demo-note">MVP DEMO <span>Alerts and locations are simulated.</span></div></aside>
+    <aside className="guardian-panel" id="dispatch" aria-label="Guardian alarm dashboard">
+      <div className="guardian-panel-header">
+        <div><div className="guardian-overline"><Radio size={13} /> GUARDIAN COMMAND</div><h2>Incoming alarms</h2></div>
+        <div className={`guardian-connection ${connection}`}><i />{connection === 'online' ? 'LIVE' : connection === 'offline' ? 'RECONNECTING' : 'CONNECTING'}</div>
       </div>
-    </section>
+
+      <div className="alarm-summary"><span className="alarm-summary-icon"><Activity size={16} /></span><span><strong>{alerts.length ? `${alerts.length} active ${alerts.length === 1 ? 'incident' : 'incidents'}` : 'Guardian watch is active'}</strong><small>Latest community safety signals</small></span><span className="alarm-count">{alerts.length.toString().padStart(2, '0')}</span></div>
+
+      <div className="alarm-list" aria-live="polite">
+        {visibleAlerts.length === 0 ? (
+          <div className="guardian-empty"><span className="empty-shield"><ShieldCheck size={21} /></span><strong>{search && alerts.length ? 'No matching incidents' : 'All clear for now'}</strong><span>{search && alerts.length ? 'Try a different search term.' : 'New SOS alerts will appear here in real time.'}</span></div>
+        ) : visibleAlerts.map((alert) => {
+          const coords = alert.location || {};
+          const lat = Number(coords.latitude);
+          const lng = Number(coords.longitude);
+          const coordText = alert.incidentSummary?.location_coords || `${lat.toFixed(4)}, ${lng.toFixed(4)}`;
+          const mapUrl = `https://www.google.com/maps?q=${lat},${lng}`;
+          const threat = alert.incidentSummary?.threat_level || 'CRITICAL';
+          const isAcknowledged = Boolean(acknowledged[alert.id]);
+          return (
+            <article className="alarm-card" key={alert.id}>
+              <div className="alarm-card-top"><span className={`threat-badge threat-${threat.toLowerCase()}`}><i />THREAT {threat}</span><time><Clock3 size={12} />{new Date(alert.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</time></div>
+              <div className="alarm-type">{alert.incidentSummary?.incident_type || "Women's Safety SOS"}</div>
+              <p className="alarm-synthesis">{alert.incidentSummary?.summary || 'SOS received. Verify safety and location immediately.'}</p>
+              <div className="alarm-location-row"><a className="location-link" href={mapUrl} target="_blank" rel="noreferrer"><MapPin size={15} /><span><small>GPS PIN</small><strong>{coordText}</strong></span><ArrowUpRight size={13} /></a>{alert.liveStreamUrl && <a className="open-feed" href={alert.liveStreamUrl} target="_blank" rel="noreferrer">OPEN FEED <ArrowUpRight size={12} /></a>}</div>
+              <div className="alarm-card-meta"><span>15-SEC AI SYNTHESIS</span><span>{alert.incidentSummary?.summary_source === 'openai' ? 'OPENAI' : 'LOCAL DEMO'}</span></div>
+              <button className={`acknowledge-button ${isAcknowledged ? 'acknowledged' : ''}`} onClick={() => acknowledge(alert.id)} disabled={isAcknowledged}>{isAcknowledged ? <><Check size={15} /> ACKNOWLEDGED · DISPATCHING</> : <><ShieldCheck size={15} /> ACKNOWLEDGE &amp; DISPATCH</>}</button>
+            </article>
+          );
+        })}
+      </div>
+
+      <div className="guardian-panel-foot"><span><i /> Secure response channel</span><span>DEMO MODE</span></div>
+    </aside>
   );
 }
