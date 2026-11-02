@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { io } from 'socket.io-client';
 import {
   Activity, BadgeCheck, BookOpenCheck, ChevronDown, ClipboardList, Crosshair,
@@ -49,8 +49,16 @@ export default function App() {
     return generated;
   });
   const [activeIncident, setActiveIncident] = useState(null);
+  const [twitchUser, setTwitchUser] = useState(null);
   const streamerSocketRef = useRef(null);
   const incidentInProgress = activeIncident && ['PENDING_DISPATCH', 'DISPATCHING', 'ESCALATED'].includes(activeIncident.status);
+
+  useEffect(() => { fetch(`${API_URL}/api/twitch/session`, { credentials: 'include' }).then((r) => r.json()).then((data) => setTwitchUser(data.user)).catch(() => {}); }, []);
+  useEffect(() => {
+    if (!twitchUser) return;
+    const location = gpsEnabled ? { lat: 12.9716, lng: 77.5946 } : { lat: 37.7694, lng: -122.4862 };
+    fetch(`${API_URL}/api/streamer/location`, { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ location }) }).catch(() => {});
+  }, [twitchUser, gpsEnabled]);
 
   async function triggerSos() {
     if (sending || incidentInProgress) return;
@@ -64,12 +72,12 @@ export default function App() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          streamer_id: streamerId,
+          streamer_id: twitchUser?.id || streamerId,
           location,
           module_type: 'FULE_PROTECT',
           audio_transcript_snippet: [transcript, chatLog && `Twitch chat: ${chatLog}`].filter(Boolean).join('\n'),
           source: 'button',
-        })
+        }), credentials: 'include'
       });
       const result = await response.json();
       if (!response.ok) throw new Error(result.error || 'Alert could not be sent');
@@ -119,8 +127,21 @@ export default function App() {
     streamerSocketRef.current?.emit(eventName, { incident_id: activeIncident.incident_id });
   }
 
-  const playerUrl = TWITCH_CHANNEL && !FRONTEND_DEMO_MODE
-    ? `https://player.twitch.tv/?channel=${encodeURIComponent(TWITCH_CHANNEL)}&parent=${encodeURIComponent(window.location.hostname)}&muted=true`
+  async function simulateTwitch(action) {
+    setSending(true);
+    try {
+      const response = await fetch(`${API_URL}/api/demo/twitch-trigger`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action, streamer_id: streamerId, location: gpsEnabled ? { lat: 12.9716, lng: 77.5946 } : { lat: 37.7694, lng: -122.4862 } }) });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error);
+      if (result.incident) { setActiveIncident(result.incident); setSosActive(true); setStatus(`Demo ${result.incident.source} SOS received`); }
+      else setStatus(result.ok ? 'Demo !safe trigger cleared the active SOS.' : 'No active SOS to clear.');
+    } catch (error) { setStatus(error.message || 'Demo trigger failed.'); }
+    finally { setSending(false); }
+  }
+
+  const activeChannel = twitchUser?.login || TWITCH_CHANNEL;
+  const playerUrl = activeChannel && !FRONTEND_DEMO_MODE
+    ? `https://player.twitch.tv/?channel=${encodeURIComponent(activeChannel)}&parent=${encodeURIComponent(window.location.hostname)}&muted=true`
     : null;
 
   return (
@@ -140,9 +161,7 @@ export default function App() {
             <span className="start-live-dot" />
             {sending ? 'SENDING ALERT…' : 'START LIVE SOS STREAM'}
           </button>
-          <button className="profile-chip" aria-label="Streamer profile menu">
-            <span className="avatar">A</span><span className="profile-name">Ari Morgan</span><ChevronDown size={14} />
-          </button>
+          {twitchUser ? <button className="profile-chip" onClick={async () => { await fetch(`${API_URL}/auth/twitch/logout`, { method: 'POST', credentials: 'include' }); setTwitchUser(null); }}><span className="avatar">{twitchUser.login[0]?.toUpperCase()}</span><span className="profile-name">{twitchUser.login}</span><ChevronDown size={14} /></button> : <a className="profile-chip" href={`${API_URL}/auth/twitch`}><span className="avatar">T</span><span className="profile-name">Connect Twitch</span><ChevronDown size={14} /></a>}
         </div>
       </header>
 
@@ -229,6 +248,8 @@ export default function App() {
           <footer className="workspace-footer"><span>FULE <b>·</b> FUTURISTIC USE OF LIVE ENTERTAINMENT</span><span>COMMUNITY-POWERED SAFETY <i /></span></footer>
         </main>
       </div>
+
+      {FRONTEND_DEMO_MODE && <div className="demo-trigger-toolbar" aria-label="Demo Twitch trigger simulator"><span>DEMO TRIGGERS</span><button onClick={() => simulateTwitch('chat_sos')}>Simulate !sos</button><button onClick={() => simulateTwitch('redeem_sos')}>Simulate Silent SOS redeem</button><button onClick={() => simulateTwitch('chat_safe')}>Simulate !safe</button></div>}
 
       <div className={`panic-banner ${activeIncident?.status === 'PENDING_DISPATCH' ? 'with-cancel' : ''}`} role="region" aria-label="Emergency SOS action">
         <div className="panic-copy"><span className="panic-shield"><ShieldAlert size={19} /></span><span><strong>Need help right now?</strong><small>{status} · 10-second grace before dispatch readiness</small></span></div>

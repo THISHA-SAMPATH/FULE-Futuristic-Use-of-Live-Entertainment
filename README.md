@@ -18,11 +18,11 @@ backend/data/guardians.json: hashed invite-code registry (ignored by git)
 backend/data/audit.jsonl: append-only state-change log (ignored by git)
 ```
 
-Precise coordinates are only sent to verified guardian sockets and the initiating streamer. Public clients receive rounded coordinates, a generic summary, and no clip URL. Guardians verify with an invite code; the API returns a short-lived session token. SOS cancellation credentials are random, returned only to the requesting streamer, and required to register the streamer socket.
+Precise coordinates are only sent to verified guardian sockets and the initiating streamer. Public clients receive rounded coordinates, a generic summary, and no clip or stream URL. Guardians verify with an invite code; the API returns a short-lived session token. SOS cancellation credentials are random, returned only to the requesting streamer, and required to register the streamer socket.
 
 ## Quickstart
 
-Requirements: Node.js 18+ and npm. From the repository root in PowerShell:
+Requirements: Node.js 22+ and npm. From the repository root in PowerShell:
 
 ```powershell
 npm run install:all
@@ -34,6 +34,16 @@ npm run dev
 Open [http://localhost:5173](http://localhost:5173). The backend listens on port 4000. Demo mode uses a deterministic summary and an offline stream stage; external Twitch or OpenAI access is optional.
 
 The demo guardian invite code in `.env.example` is for local demonstration only. Enter it in the dashboard's **Verify guardian invite** control. The code is hashed into `backend/data/guardians.json`; the raw value is never written there.
+
+## Twitch integration setup
+
+1. Create an application in the [Twitch Developer Console](https://dev.twitch.tv/console/apps). Set its OAuth redirect URL to `http://localhost:4000/auth/twitch/callback` and use Authorization Code Grant.
+2. Copy the Client ID and Client Secret into `backend/.env`. Set `DEMO_MODE=false`, `TWITCH_REDIRECT_URI=http://localhost:4000/auth/twitch/callback`, and keep `FRONTEND_ORIGIN=http://localhost:5173`. Never put Twitch secrets in frontend variables.
+3. Keep `VITE_DEMO_MODE=true` while rehearsing the simulator. For live use, set it to `false` and sign in with **Connect Twitch**. FULE keeps the broadcaster ID, login, OAuth access/refresh tokens, scopes and expiry in backend memory only. Requested scopes are `user:read:chat`, `channel:read:redemptions`, and `clips:edit`.
+4. Create a Channel Points reward named **Silent SOS** in the Twitch channel. Optionally set its reward ID in `TWITCH_SILENT_SOS_REWARD_ID`. The signed-in broadcaster's EventSub WebSocket listens for broadcaster-authored `!sos`/`!safe` and the matching redemption. Messages from other chatters are ignored.
+5. Keep the FULE tab open and GPS simulator enabled to provide current simulated coordinates to the server. If an EventSub alert arrives without a location update, guardians see “Location unavailable”; FULE does not substitute a fabricated point. Twitch Create Clip is attempted after SOS and attached asynchronously when available. Offline/permission errors never delay the SOS.
+
+Twitch OAuth/EventSub need working credentials and internet. Without them, **DEMO TRIGGERS** simulate `!sos`, a Silent SOS redemption, and `!safe` through the same incident pipeline. Incident cards embed the live Twitch channel only in the verified guardian dashboard. Precise coordinates, summaries, stream URLs and clip evidence are sent only to the authenticated `guardians` room; public updates omit them.
 
 To connect the Twitch player, set `VITE_DEMO_MODE=false` and `VITE_TWITCH_CHANNEL=your_channel_name` in `frontend/.env`. The player `parent` is read from `window.location.hostname`. To enable OpenAI synthesis, set `OPENAI_API_KEY` in `backend/.env` and set `DEMO_MODE=false`. Without credentials or on API failure, a keyword-based deterministic fallback is used.
 

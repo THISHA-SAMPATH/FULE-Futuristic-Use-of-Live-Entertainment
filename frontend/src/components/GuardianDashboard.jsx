@@ -44,6 +44,7 @@ export default function GuardianDashboard({ search = '' }) {
       setAcknowledged((current) => ({ ...current, [incident.incident_id]: true }));
       setAlerts((current) => current.map((item) => item.incident_id === incident.incident_id ? incident : item));
     });
+    socket.on('incident_clip_ready', (incident) => { if (roleRef.current === 'guardian' && isIncident(incident)) setAlerts((current) => current.map((item) => item.incident_id === incident.incident_id ? incident : item)); });
     for (const event of ['incident_dispatch_ready', 'incident_escalated', 'sos_cancelled']) {
       socket.on(event, (incident) => {
         if (isIncident(incident)) setAlerts((current) => current.map((item) => item.incident_id === incident.incident_id ? incident : item));
@@ -119,7 +120,7 @@ export default function GuardianDashboard({ search = '' }) {
           const lng = Number(coords.lng);
           const isPrecise = role === 'guardian';
           const coordText = isPrecise ? `${lat.toFixed(4)}, ${lng.toFixed(4)}` : coords.address;
-          const mapUrl = `https://www.google.com/maps?q=${lat},${lng}`;
+          const mapUrl = Number.isFinite(lat) && Number.isFinite(lng) ? `https://www.google.com/maps?q=${lat},${lng}` : null;
           const threat = alert.threat_level || 'CRITICAL';
           const isAcknowledged = Boolean(acknowledged[alert.incident_id]) || ['ACKNOWLEDGED', 'CANCELLED', 'FALSE_ALARM', 'RESOLVED'].includes(alert.status);
           return (
@@ -127,7 +128,8 @@ export default function GuardianDashboard({ search = '' }) {
               <div className="alarm-card-top"><span className={`threat-badge threat-${threat.toLowerCase()}`}><i />THREAT {threat}</span><time><Clock3 size={12} />{new Date(alert.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</time></div>
               <div className="alarm-type">{alert.module.replaceAll('_', ' ')}</div>
               <p className="alarm-synthesis">{alert.summary}</p>
-              <div className="alarm-location-row">{isPrecise ? <a className="location-link" href={mapUrl} target="_blank" rel="noreferrer"><MapPin size={15} /><span><small>PRECISE GPS PIN</small><strong>{coordText}</strong></span><ArrowUpRight size={13} /></a> : <span className="location-link public-location"><MapPin size={15} /><span><small>APPROXIMATE LOCATION</small><strong>{coordText}</strong></span></span>}{alert.clip_url && <a className="open-feed" href={alert.clip_url} target="_blank" rel="noreferrer">OPEN CLIP <ArrowUpRight size={12} /></a>}</div>
+              {role === 'guardian' && alert.stream_url && <div className="guardian-live-stream"><iframe title={`Private guardian view for ${alert.incident_id}`} src={`https://player.twitch.tv/?channel=${encodeURIComponent(alert.stream_url.split('/').pop())}&parent=${encodeURIComponent(window.location.hostname)}&muted=true`} allowFullScreen allow="autoplay; fullscreen" /><span><Radio size={12} /> GUARDIAN LIVE FEED</span></div>}
+              <div className="alarm-location-row">{isPrecise && mapUrl ? <a className="location-link" href={mapUrl} target="_blank" rel="noreferrer"><MapPin size={15} /><span><small>PRECISE GPS PIN</small><strong>{coordText}</strong></span><ArrowUpRight size={13} /></a> : <span className="location-link public-location"><MapPin size={15} /><span><small>{isPrecise ? 'LOCATION UNAVAILABLE' : 'APPROXIMATE LOCATION'}</small><strong>{isPrecise ? 'No GPS supplied' : coordText}</strong></span></span>}{alert.clip_url && <a className="open-feed" href={alert.clip_url} target="_blank" rel="noreferrer">OPEN CLIP <ArrowUpRight size={12} /></a>}</div>
               <div className="alarm-card-meta"><span>15-SEC AI SYNTHESIS</span><span>{alert.source.toUpperCase()} · {alert.status}</span></div>
               {alert.escalated && <div className="escalation-note">ESCALATED · {alert.escalation_flag}</div>}
               <button className={`acknowledge-button ${isAcknowledged ? 'acknowledged' : ''}`} onClick={() => acknowledge(alert.incident_id)} disabled={isAcknowledged || role !== 'guardian'}>{role !== 'guardian' ? <><ShieldCheck size={15} /> GUARDIAN ACCESS REQUIRED</> : isAcknowledged ? <><Check size={15} /> ACKNOWLEDGED · DISPATCHING</> : <><ShieldCheck size={15} /> ACKNOWLEDGE &amp; DISPATCH</>}</button>

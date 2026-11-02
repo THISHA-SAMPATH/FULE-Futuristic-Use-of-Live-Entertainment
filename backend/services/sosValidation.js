@@ -6,11 +6,10 @@ export function validateSosPayload(body) {
   if (!streamer_id || streamer_id.length > 100 || !/^[\w-]+$/.test(streamer_id)) {
     return { ok: false, error: 'streamer_id is required and must contain only letters, numbers, underscores, or hyphens.' };
   }
-  const lat = Number(body.location?.lat);
-  const lng = Number(body.location?.lng);
-  if (!Number.isFinite(lat) || lat < -90 || lat > 90 || !Number.isFinite(lng) || lng < -180 || lng > 180) {
-    return { ok: false, error: 'location.lat and location.lng must be valid coordinates.' };
-  }
+  const unavailable = body.location?.lat == null && body.location?.lng == null && body.location?.address === 'Location unavailable';
+  const lat = body.location?.lat == null ? null : Number(body.location.lat);
+  const lng = body.location?.lng == null ? null : Number(body.location.lng);
+  if (!unavailable && (!Number.isFinite(lat) || lat < -90 || lat > 90 || !Number.isFinite(lng) || lng < -180 || lng > 180)) return { ok: false, error: 'location.lat and location.lng must be valid coordinates.' };
   const module_type = String(body.module_type || 'FULE_PROTECT').toUpperCase();
   if (!INCIDENT_MODULES.includes(module_type)) return { ok: false, error: `module_type must be one of: ${INCIDENT_MODULES.join(', ')}.` };
   const source = body.source || 'button';
@@ -22,7 +21,7 @@ export function validateSosPayload(body) {
     ok: true,
     value: {
       streamer_id,
-      location: { lat, lng, address: 'Simulated location · address withheld publicly' },
+      location: { lat, lng, address: unavailable ? 'Location unavailable' : 'Simulated location · address withheld publicly' },
       module_type,
       audio_transcript_snippet: String(body.audio_transcript_snippet || '').slice(-4000),
       source
