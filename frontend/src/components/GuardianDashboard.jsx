@@ -3,6 +3,7 @@ import { io } from 'socket.io-client';
 import { Activity, ArrowUpRight, Check, Clock3, LoaderCircle, MapPin, Radio, ShieldCheck, TriangleAlert } from 'lucide-react';
 import { isIncident } from '../../../shared/incident.mjs';
 import { API_URL } from '../config.js';
+import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
 import './GuardianDashboard.css';
 
 function elapsedTime(date, now) {
@@ -16,7 +17,8 @@ function escalationSeconds(date, now) {
   return Math.max(0, Math.ceil((Date.parse(date) + 30_000 - now) / 1000));
 }
 
-export default function GuardianDashboard({ search = '', onIncidentsChange, onRoleChange, onStatus }) {
+export default function GuardianDashboard({ search = '', onIncidentsChange, onRoleChange, onStatus, demoMode = false, demoAlerts = [] }) {
+  const reduceMotion = useReducedMotion();
   const [alerts, setAlerts] = useState([]);
   const [connection, setConnection] = useState('connecting');
   const [role, setRole] = useState('public');
@@ -26,6 +28,7 @@ export default function GuardianDashboard({ search = '', onIncidentsChange, onRo
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
   const [ackPending, setAckPending] = useState({});
+  const [demoStatuses, setDemoStatuses] = useState({});
   const [now, setNow] = useState(Date.now());
   const socketRef = useRef(null);
   const roleRef = useRef('public');
@@ -39,6 +42,7 @@ export default function GuardianDashboard({ search = '', onIncidentsChange, onRo
     socket.on('disconnect', () => connectionState('offline'));
     socket.on('connect_error', (error) => {
       connectionState('offline');
+      if (demoMode) setLoading(false);
       if (guardianToken && error.message?.includes('Guardian session')) {
         sessionStorage.removeItem('fuleGuardianToken');
         accessRole('public');
@@ -67,12 +71,13 @@ export default function GuardianDashboard({ search = '', onIncidentsChange, onRo
     socket.on('incident:public:update', (update) => publishAlerts((current) => current.map((item) => item.incident_id === update.incident_id ? { ...item, ...update } : item)));
     const tick = window.setInterval(() => setNow(Date.now()), 1000);
     return () => { window.clearInterval(tick); socket.disconnect(); };
-  }, [guardianToken]);
+  }, [guardianToken, demoMode]);
 
   const visibleAlerts = useMemo(() => {
-    const query = search.trim().toLowerCase(); if (!query) return alerts;
-    return alerts.filter((alert) => [alert.summary, alert.module, alert.location?.address, alert.status, alert.threat_level].some((value) => String(value || '').toLowerCase().includes(query)));
-  }, [alerts, search]);
+    const allAlerts = [...demoAlerts.map((item) => ({ ...item, status: demoStatuses[item.incident_id] || item.status })), ...alerts];
+    const query = search.trim().toLowerCase(); if (!query) return allAlerts;
+    return allAlerts.filter((alert) => [alert.summary, alert.module, alert.location?.address, alert.status, alert.threat_level].some((value) => String(value || '').toLowerCase().includes(query)));
+  }, [alerts, demoAlerts, demoStatuses, search]);
 
   async function connectGuardian(event) {
     event.preventDefault(); const invite = tokenDraft.trim(); if (!invite) return;
@@ -85,6 +90,10 @@ export default function GuardianDashboard({ search = '', onIncidentsChange, onRo
   }
 
   function acknowledge(alert) {
+    if (alert.demo) {
+      setDemoStatuses((current) => ({ ...current, [alert.incident_id]: 'ACKNOWLEDGED' }));
+      return;
+    }
     if (roleRef.current !== 'guardian' || ackPending[alert.incident_id] || alert.status === 'ACKNOWLEDGED') return;
     setAckPending((current) => ({ ...current, [alert.incident_id]: true }));
     socketRef.current?.emit('acknowledge_incident', alert.incident_id);
@@ -95,7 +104,7 @@ export default function GuardianDashboard({ search = '', onIncidentsChange, onRo
     sessionStorage.removeItem('fuleGuardianToken'); setGuardianToken(''); accessRole('public'); publishAlerts([]); setAckPending({}); setLoadError('');
   }
 
-  const activeCount = alerts.filter((item) => ['PENDING_DISPATCH', 'DISPATCHING', 'ESCALATED'].includes(item.status)).length;
+  const activeCount = visibleAlerts.filter((item) => ['PENDING_DISPATCH', 'DISPATCHING', 'ESCALATED'].includes(item.status)).length;
   return <aside className="guardian-panel" id="feeds" aria-label="Guardian alert panel">
     <div className="guardian-panel-header"><div><p className="eyebrow"><Radio size={13}/> GUARDIAN NETWORK</p><h2>Emergency alerts</h2></div><span className={`guardian-connection ${connection}`}><i/>{connection === 'online' ? 'LIVE' : connection === 'offline' ? 'OFFLINE' : 'CONNECTING'}</span></div>
     {role !== 'guardian' && <div className="guardian-access"><ShieldCheck size={15}/><span>Public feed · private details require verification</span></div>}
@@ -104,28 +113,29 @@ export default function GuardianDashboard({ search = '', onIncidentsChange, onRo
     <div className="alerts-overview"><span className="overview-mark"><Activity size={17}/></span><span><strong>{activeCount} active {activeCount === 1 ? 'alert' : 'alerts'}</strong><small>{role === 'guardian' ? 'Guardian only incident details' : 'Anonymized safety notices'}</small></span></div>
     {loadError && <div className="panel-error" role="alert"><TriangleAlert size={14}/>{loadError}</div>}
     <div className="alert-list" id="logs" aria-live="polite">
-      {loading ? <div className="panel-state"><LoaderCircle className="spinner" size={22}/><strong>Loading alert feed</strong><span>Connecting to live safety updates…</span></div>
+      {loading && !demoMode ? <div className="panel-state"><LoaderCircle className="spinner" size={22}/><strong>Loading alert feed</strong><span>Connecting to live safety updates…</span></div>
         : visibleAlerts.length === 0 ? <div className="panel-state"><span className="empty-shield"><ShieldCheck size={23}/></span><strong>{search && alerts.length ? 'No matching alerts' : 'No active alerts'}</strong><span>{search && alerts.length ? 'Try a different search.' : 'New alerts will appear here in real time.'}</span></div>
-          : visibleAlerts.map((alert) => {
+          : <AnimatePresence initial={false}>{visibleAlerts.map((alert) => {
             const threat = alert.threat_level;
             const address = alert.location?.address || 'Location unavailable';
             const acknowledged = alert.status === 'ACKNOWLEDGED';
             const activeStatus = ['PENDING_DISPATCH', 'DISPATCHING', 'ESCALATED'].includes(alert.status);
             const countdown = escalationSeconds(alert.created_at, now);
-            return <article className="alert-card" key={alert.incident_id}>
+            return <motion.article className="alert-card" key={alert.incident_id} layout initial={reduceMotion ? false : { opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={reduceMotion ? undefined : { opacity: 0, y: -8 }} transition={{ duration: reduceMotion ? 0 : .23 }}>
               <div className="alert-card-top"><span className={`threat-badge threat-${threat.toLowerCase()}`}><i/>THREAT · {threat}</span><time dateTime={alert.created_at} title={new Date(alert.created_at).toLocaleString()}><Clock3 size={12}/>{elapsedTime(alert.created_at, now)}</time></div>
+              {alert.demo && <div className="simulated-ribbon">SIMULATED · NO REAL INCIDENT</div>}
               <div className="alert-category">{alert.module.replaceAll('_', ' ')}</div>
               <p className="alert-summary">{alert.summary}</p>
               <div className="alert-location"><MapPin size={14}/><span>{address}</span></div>
               {activeStatus && <div className="escalation-countdown" role="timer" aria-label={countdown ? `Escalation in ${countdown} seconds` : 'Escalation is due'}><span><Clock3 size={13}/>ESCALATION</span><strong>{countdown ? `00:${String(countdown).padStart(2, '0')}` : 'DUE'}</strong></div>}
               <div className="alert-meta"><span>{alert.source.toUpperCase()} · {alert.status.replaceAll('_', ' ')}</span>{alert.clip_url && <a href={alert.clip_url} target="_blank" rel="noreferrer" aria-label="Open clip evidence">CLIP EVIDENCE <ArrowUpRight size={12}/></a>}</div>
               {alert.escalated && <p className="alert-escalation-note">{alert.escalation_flag}</p>}
-              <button className={`acknowledge-button ${acknowledged ? 'acknowledged' : ''}`} onClick={() => acknowledge(alert)} disabled={role !== 'guardian' || acknowledged || Boolean(ackPending[alert.incident_id])} aria-label={acknowledged ? 'Incident acknowledged' : `Acknowledge and dispatch incident ${alert.incident_id}`}>
-                {acknowledged ? <><Check size={15}/>ACKNOWLEDGED</> : ackPending[alert.incident_id] ? <><LoaderCircle className="spinner" size={15}/>SENDING…</> : role !== 'guardian' ? <><ShieldCheck size={15}/>GUARDIAN ACCESS REQUIRED</> : <><ShieldCheck size={15}/>ACKNOWLEDGE &amp; DISPATCH</>}
+              <button className={`acknowledge-button ${acknowledged ? 'acknowledged' : ''}`} onClick={() => acknowledge(alert)} disabled={acknowledged || (!alert.demo && role !== 'guardian') || Boolean(ackPending[alert.incident_id])} aria-label={acknowledged ? 'Incident acknowledged' : `Acknowledge and dispatch incident ${alert.incident_id}`}>
+                {acknowledged ? <><Check size={15}/>ACKNOWLEDGED</> : ackPending[alert.incident_id] ? <><LoaderCircle className="spinner" size={15}/>SENDING…</> : alert.demo ? <><ShieldCheck size={15}/>SIMULATE ACKNOWLEDGEMENT</> : role !== 'guardian' ? <><ShieldCheck size={15}/>GUARDIAN ACCESS REQUIRED</> : <><ShieldCheck size={15}/>ACKNOWLEDGE &amp; DISPATCH</>}
               </button>
-            </article>;
-          })}
+            </motion.article>;
+          })}</AnimatePresence>}
     </div>
-    <footer className="guardian-panel-foot"><span><i className={connection === 'online' && role === 'guardian' ? 'online' : ''}/>{role === 'guardian' ? 'Verified secure channel' : 'Public read-only feed'}</span><span>{role === 'guardian' ? 'GUARDIAN' : 'PUBLIC'}</span></footer>
+    <footer className="guardian-panel-foot"><span><i className={connection === 'online' && role === 'guardian' ? 'online' : ''}/>{role === 'guardian' ? 'Verified secure channel' : 'Public read-only feed'}</span><span>{demoMode ? 'DEMO' : role === 'guardian' ? 'GUARDIAN' : 'PUBLIC'}</span></footer>
   </aside>;
 }

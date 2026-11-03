@@ -33,6 +33,8 @@ npm run dev
 
 Open [http://localhost:5173](http://localhost:5173). The backend listens on port 4000. Demo mode uses a deterministic summary and an offline stream stage; external Twitch or OpenAI access is optional.
 
+For the seeded dashboard, set `DEMO_MODE=true` in `backend/.env` and `VITE_DEMO_MODE=true` in `frontend/.env`. This fills the live stream, guardian, network, and anonymized alert sections with clearly labeled simulated data. Set both values to `false` to see the production empty/loading/error states.
+
 The development server uses strict ports so it reports conflicts instead of silently moving the frontend to a port rejected by the backend origin policy. If a previous FULE run is still listening, inspect and stop only the stale FULE PIDs in PowerShell:
 
 ```powershell
