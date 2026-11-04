@@ -1,0 +1,55 @@
+name: CI
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env: { POSTGRES_USER: fule, POSTGRES_PASSWORD: fule-ci, POSTGRES_DB: fule }
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U fule -d fule"
+          --health-interval 5s --health-timeout 3s --health-retries 20
+      redis:
+        image: redis:7
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 3s --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm, cache-dependency-path: backend/package-lock.json }
+      - run: npm ci
+        working-directory: backend
+      - run: npm ci
+        working-directory: frontend
+      - run: npm run migrate:latest
+        working-directory: backend
+        env:
+          NODE_ENV: test
+          DATABASE_URL: postgres://fule:fule-ci@localhost:5432/fule
+      - run: npm run verify:infrastructure
+        working-directory: backend
+        env:
+          NODE_ENV: test
+          DATABASE_URL: postgres://fule:fule-ci@localhost:5432/fule
+          REDIS_URL: redis://localhost:6379
+      - run: npm run lint && npm test
+        working-directory: backend
+        env:
+          NODE_ENV: test
+          DATABASE_URL: postgres://fule:fule-ci@localhost:5432/fule
+          REDIS_URL: redis://localhost:6379
+          DEMO_MODE: true
+          FRONTEND_ORIGIN: http://localhost:5173
+          JWT_ACCESS_SECRET: test-only-secret-123456789012345678901234
+      - run: npm test && npm run build
+        working-directory: frontend
+      - run: npm audit --audit-level=high
+        working-directory: backend

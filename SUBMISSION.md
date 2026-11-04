@@ -12,7 +12,7 @@ During a distressing public moment, someone may need a fast way to signal truste
 
 ## Solution
 
-FULE uses a streamer-triggered SOS and a verified guardian channel to turn community attention into a structured response: the streamer can cancel during a short grace window, guardians see context and acknowledge, AI can summarize the transcript, public updates stay coarse and redacted, and incident history survives backend restarts in SQLite.
+FULE uses a streamer-triggered SOS and a verified guardian channel to turn community attention into a structured response: the streamer can cancel before dispatch, guardians see context and acknowledge, AI can summarize the transcript, public updates stay coarse and redacted, and production incident history is stored in PostgreSQL with Redis-backed escalation jobs.
 
 ## Features
 
@@ -33,14 +33,14 @@ We used OpenAI Codex as an iterative engineering collaborator across the build. 
 - **Balancing speed with privacy:** guardians need actionable details while a public audience should not see precise coordinates or private context.
 - **Resilient live integrations:** Twitch OAuth, EventSub reconnects, chat/redeem sources and asynchronous clips can fail independently; the demo must still operate offline.
 - **Keeping the demo honest:** seeded profiles, coordinates and trigger sources must be clearly identified as synthetic and must not imply a real emergency response.
-- **Durable incident history:** backend memory alone loses context after restarts, so incident state is stored in SQLite on a persistent deployment volume.
+- **Durable coordination:** production uses PostgreSQL and BullMQ/Redis for state and scheduled escalation work; local demos use a swappable file repository.
 
 ## What's next
 
 - Complete an end-to-end test using the team's authorized Twitch channel and deployed Vercel/Render domains.
-- Add a guardian presence/qualification workflow and consent-based trusted contact escalation.
+- Complete operational review of administrator-approved guardian accounts and trusted contact notification.
 - Add encrypted evidence retention, explicit retention controls and audited deletion.
-- Improve network resilience with a managed Socket.IO adapter and operational monitoring for multi-instance deployment.
+- Run the 1,000-client/50-SOS-per-second test against provisioned PostgreSQL and Redis, then tune from measured results.
 - Run accessibility and threat-model reviews with safety advocates before any real-world pilot.
 
 ## Architecture
@@ -52,8 +52,11 @@ flowchart LR
   Twitch[Twitch OAuth / EventSub / Helix] --> API
   API --> AI[OpenAI structured synthesis]
   API -->|offline fallback| Fallback[Deterministic incident summary]
-  API --> DB[(SQLite incidents)]
-  API --> Audit[Append-only audit log]
+  API --> DB[(PostgreSQL · Knex)]
+  API --> Redis[(Redis)]
+  Redis --> Adapter[Socket.IO Redis adapter]
+  Redis --> Jobs[BullMQ timers + retention]
+  API --> Audit[(PostgreSQL audit events)]
   API -->|precise guardian-only alerts| Socket
   API -->|coarse redacted updates| Socket
   Socket --> Guardians[Verified guardian dashboard]
@@ -70,7 +73,7 @@ flowchart LR
 | 18–30s | Click **Button SOS**; capture the alert appearing and the cancel countdown. | Show quick activation, structured AI summary and the short cancel grace. |
 | 30–42s | Show approximate location in the alert and exact pin only after verifying the demo guardian; point at the privacy note. | Explain public redaction versus guardian-only details. |
 | 42–54s | Cancel the first demo alert, trigger again, then click **ACKNOWLEDGE & DISPATCH**. | Demonstrate streamer cancellation and guardian state change. |
-| 54–66s | Open **Logs** / incident history; show a completed status and persisted record. | Explain SQLite history and audited state changes. |
+| 54–66s | Open **Logs** / incident history; show a completed status and persisted record. | Explain PostgreSQL history and audited state changes. |
 | 66–78s | Briefly show the Twitch stream stage and the Twitch setup section in the README or deployment guide. | Describe live OAuth/EventSub and optional clips as credential-enabled integrations. |
 | 78–85s | End on Responsible use note. | “FULE supplements, but does not replace, emergency services (112). This prototype does not contact responders.” |
 

@@ -98,6 +98,8 @@ before(async () => {
       PORT: String(port),
       FRONTEND_ORIGIN: origin,
       DEMO_MODE: 'true',
+      DATABASE_URL: '',
+      REDIS_URL: '',
       TWITCH_CLIENT_ID: 'integration-client-id',
       TWITCH_CLIENT_SECRET: 'integration-client-secret',
       TWITCH_REDIRECT_URI: `${origin}/auth/twitch/callback`,
@@ -130,6 +132,24 @@ test('SOS create route accepts every supported module', async () => {
     const body = await response.json();
     assert.equal(body.incident.module, module_type);
   }
+});
+
+test('SOS idempotency key returns the original incident on retry', async () => {
+  const payload = {
+    streamer_id: 'idempotency-streamer',
+    location: { lat: 12.9716, lng: 77.5946 },
+    module_type: 'FULE_PROTECT', source: 'button',
+    audio_transcript_snippet: 'Routine idempotency test check-in.'
+  };
+  const post = () => fetch(`${origin}/api/sos`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json', 'Idempotency-Key': 'repeat-request-0001' }, body: JSON.stringify(payload)
+  });
+  const first = await post(); const firstBody = await first.json();
+  const retry = await post(); const retryBody = await retry.json();
+  assert.equal(first.status, 201);
+  assert.equal(retry.status, 200);
+  assert.equal(retryBody.incident.incident_id, firstBody.incident.incident_id);
+  assert.equal(retryBody.streamer_cancel_token, firstBody.streamer_cancel_token);
 });
 
 test('demo API accepts Vite fallback localhost origins with CORS credentials', async () => {

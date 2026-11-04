@@ -8,7 +8,7 @@ import { join } from 'node:path';
 test('incidents and state changes survive a new backend process', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'fule-sqlite-'));
   const storeUrl = new URL('../services/incidentStore.js', import.meta.url).href;
-  const env = { ...process.env, FULE_DATA_DIR: directory };
+  const env = { ...process.env, DATABASE_URL: '', REDIS_URL: '', FULE_DATA_DIR: directory };
   const incident = { incident_id: 'persisted-1', created_at: new Date().toISOString(), status: 'PENDING_DISPATCH', streamer_id: 'private-streamer', location: { lat: 1.2, lng: 3.4 } };
   try {
     execFileSync(process.execPath, ['--input-type=module', '-e', `const store = await import(${JSON.stringify(storeUrl)}); store.persistIncident(${JSON.stringify(incident)}); store.closeIncidentStore();`], { env, stdio: 'ignore' });

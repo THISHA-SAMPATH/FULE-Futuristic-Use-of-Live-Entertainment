@@ -2,6 +2,7 @@ import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { resolve } from 'node:path';
+import { authenticateAccess } from './accountService.js';
 
 const dataDirectory = resolve(process.env.FULE_DATA_DIR || fileURLToPath(new URL('../data/', import.meta.url)));
 const registryPath = resolve(dataDirectory, 'guardians.json');
@@ -63,6 +64,8 @@ export function verifyGuardianInvite(inviteCode, { allowDemo = false } = {}) {
 
 export function authenticateGuardian(token) {
   if (typeof token !== 'string') return null;
+  const account = authenticateAccess(token);
+  if (account?.role === 'guardian' || account?.role === 'admin') return { guardian_id: account.account_id, expires_at: Date.now() + 10 * 60_000, role: account.role };
   const session = sessions.get(token);
   if (!session) return null;
   if (session.expires_at <= Date.now()) {

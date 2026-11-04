@@ -8,7 +8,10 @@
     "dev": "concurrently --kill-others-on-fail -n backend,frontend -c cyan,magenta \"npm run dev:backend\" \"npm run dev:frontend\"",
     "dev:backend": "npm --prefix backend run dev",
     "dev:frontend": "npm --prefix frontend run dev",
-    "start": "npm --prefix backend start"
+    "start": "npm --prefix backend start",
+    "test": "npm --prefix backend test && npm --prefix frontend test",
+    "build": "npm --prefix frontend run build",
+    "load:test:baseline": "node load-tests/run-local-baseline.mjs"
   },
   "devDependencies": {
     "concurrently": "^9.1.2"

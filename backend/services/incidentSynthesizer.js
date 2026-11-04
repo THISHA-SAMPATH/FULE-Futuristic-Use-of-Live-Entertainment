@@ -1,4 +1,5 @@
 import OpenAI from 'openai';
+import { log } from './securityMetrics.js';
 
 const SUMMARY_SCHEMA = {
   type: 'object',
@@ -80,7 +81,7 @@ export async function synthesizeIncident(input, options = {}) {
     };
     } catch (error) {
       if (Date.now() >= deadline || attempt >= 2) {
-        console.error('Incident synthesis failed; using deterministic fallback.');
+        log('error', 'incident_synthesis_failed', { fallback: 'deterministic', error: error.message });
         return fallback;
       }
     } finally {

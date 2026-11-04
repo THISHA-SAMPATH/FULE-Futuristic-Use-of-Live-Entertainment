@@ -1,0 +1,55 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: fule
+      POSTGRES_USER: fule
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in the root .env file}
+    volumes: [fule-postgres:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U fule -d fule"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes: [fule-redis:/data]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    environment:
+      NODE_ENV: development
+      DEMO_MODE: ${DEMO_MODE:-true}
+      PORT: 4000
+      DATABASE_URL: postgres://fule:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in the root .env file}@postgres:5432/fule
+      REDIS_URL: redis://redis:6379
+      FRONTEND_ORIGIN: http://localhost:4173
+      JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:?Set JWT_ACCESS_SECRET in the root .env file}
+      METRICS_TOKEN: ${METRICS_TOKEN:?Set METRICS_TOKEN in the root .env file}
+      INCIDENT_RETENTION_DAYS: ${INCIDENT_RETENTION_DAYS:-90}
+      FULE_DEMO_GUARDIAN_INVITE: ${FULE_DEMO_GUARDIAN_INVITE:?Set FULE_DEMO_GUARDIAN_INVITE in the root .env file}
+      FULE_LOAD_TEST_TOKEN: ${FULE_LOAD_TEST_TOKEN:-}
+      FULE_SOS_IP_LIMIT: ${FULE_SOS_IP_LIMIT:-6}
+      FULE_API_IP_LIMIT: ${FULE_API_IP_LIMIT:-180}
+    ports: ["4000:4000"]
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        VITE_API_URL: http://localhost:4000
+        VITE_DEMO_MODE: ${DEMO_MODE:-true}
+    ports: ["4173:80"]
+    depends_on: [backend]
+volumes:
+  fule-postgres:
+  fule-redis:

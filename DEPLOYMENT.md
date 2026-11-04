@@ -1,41 +1,48 @@
-# FULE deployment guide
+# Deployment
 
-This guide deploys the React app to Vercel and the Express + Socket.IO API to Render. It does not create an actual deployment; configure the provider accounts and domains first.
+## Required production services
 
-## 1. Deploy the API to Render
+- Node.js 22 backend container with a writable temporary directory only.
+- Managed PostgreSQL (`DATABASE_URL`) and Redis (`REDIS_URL`) with private networking, TLS where supported, backups, and monitoring.
+- One exact HTTPS frontend origin in `FRONTEND_ORIGIN`.
+- Secret manager values for `JWT_ACCESS_SECRET`, Twitch credentials, OpenAI, dispatch/Twilio integrations, `METRICS_TOKEN`, and optional `SENTRY_DSN`.
 
-1. Push this repository to GitHub and create a Render Blueprint from its root `render.yaml` (or create a Web Service with the backend settings below).
-2. Keep the Render service root at the repository root: the backend imports the shared incident schema from `shared/`. The blueprint installs/starts the backend with `npm --prefix backend` and uses `/api/health` as the health check. It attaches `/var/data` so SQLite incidents, guardian invite hashes, and the audit log persist across service restarts. A persistent disk requires a paid Render plan.
-3. In the service environment, set:
-   - `FRONTEND_ORIGIN=https://<your-vercel-domain>` (one exact origin, no path or trailing slash).
-   - `TWITCH_CLIENT_ID`, `TWITCH_CLIENT_SECRET`, and `TWITCH_REDIRECT_URI=https://<your-render-service>.onrender.com/auth/twitch/callback`.
-   - `OPENAI_API_KEY` if live synthesis is desired; deterministic fallback works without it.
-   - `DEMO_MODE=false`, `FULE_DATA_DIR=/var/data` (the blueprint sets these).
-4. Do not set `FULE_DEMO_GUARDIAN_INVITE` in production. Create a real guardian invite from the Render shell with `npm run create:guardian -- <guardian-id>` and deliver the printed code privately. The demo invite is for local demo use only.
-5. Confirm `https://<your-render-service>.onrender.com/api/health` returns `{ "status": "ok" }`.
+Do not enable `DEMO_MODE` on a public deployment. Do not set `FULE_DEMO_GUARDIAN_INVITE` or `FULE_LOAD_TEST_TOKEN` outside local demos/tests. Create the first admin with the one-time operational command `npm --prefix backend run create:admin`, then remove the bootstrap credential from the runtime environment. Admin access is needed to approve guardian accounts.
 
-## 2. Configure Twitch OAuth and embeds
+## Build and run
 
-In the [Twitch Developer Console](https://dev.twitch.tv/console/apps), use a Confidential app. Add the exact Render callback URL above as the OAuth Redirect URL. Configure the requested product scopes during login: `user:read:chat`, `channel:read:redemptions`, `channel:manage:redemptions`, and `clips:edit`.
+The repository includes `backend/Dockerfile`, `frontend/Dockerfile`, and `docker-compose.yml` for local development. Production platforms should build those images and inject runtime values. Backend startup runs Knex migrations; deploys should first take a PostgreSQL backup and canary the new image before shifting all traffic.
 
-The embed's `parent` parameter comes from `window.location.hostname`; no fixed domain is compiled into the frontend. Twitch requires the served hostname to match the `parent` value. Test from the actual Vercel custom domain, not a preview URL that is not configured for your Twitch app.
+Set `FRONTEND_ORIGIN=https://<frontend-domain>` exactly, and add the exact Twitch OAuth redirect URL `https://<api-domain>/auth/twitch/callback` in the Twitch Developer Console. Vercel frontend build values are `VITE_API_URL=https://<api-domain>` and `VITE_DEMO_MODE=false`; `VITE_` values are public.
 
-## 3. Deploy the frontend to Vercel
+Set `DATABASE_URL` and `REDIS_URL` to managed services. Production intentionally fails at startup if either is absent. Configure PostgreSQL connection pool size for the service's connection budget (`PG_POOL_MAX`), and retain PostgreSQL connections below the database limit across all app instances. Redis must be shared by API instances to coordinate rate limits, socket fan-out, BullMQ work, and broadcaster EventSub ownership. If Twitch integration is enabled, generate and set `TWITCH_TOKEN_ENCRYPTION_KEY` as 32 random bytes encoded in Base64.
 
-1. Import the GitHub repository into Vercel and set **Root Directory** to `frontend`. In the Root Directory settings, enable **Include source files outside of the Root Directory in the Build Step** because the frontend imports the shared incident schema from `shared/`.
-2. Use `npm run build` as the build command and `dist` as the output directory. `frontend/vercel.json` provides SPA fallback routing.
-3. Add these Vercel environment variables for Production:
-   - `VITE_API_URL=https://<your-render-service>.onrender.com`
-   - `VITE_DEMO_MODE=false`
-   - `VITE_TWITCH_CHANNEL=<authorized-test-channel>`
-4. Redeploy after changing Vite environment values. Build-time `VITE_` values are public; never put Twitch secrets, invite codes, or API keys there.
+## Health, scaling, and retention
 
-## 4. Set final CORS and test
+- Liveness: `GET /api/health`.
+- Readiness: `GET /api/ready` checks PostgreSQL and Redis.
+- Metrics: `GET /metrics`, protected by `Authorization: Bearer $METRICS_TOKEN`.
+- Use a load balancer with WebSocket upgrade support and sticky sessions if using Socket.IO long-polling fallback. WebSocket-only operation avoids polling affinity requirements.
+- Configure `INCIDENT_RETENTION_DAYS` to match the approved data policy. The hourly BullMQ cleanup removes expired incidents, audit events, idempotency keys, and expired/revoked refresh tokens.
+- Configure Sentry with `SENTRY_DSN`; tune sampling with `SENTRY_TRACES_SAMPLE_RATE`.
+- Terminate TLS at the managed ingress. Set `TRUST_PROXY_HOPS` only to the exact number of trusted reverse-proxy hops in front of the API; do not enable blanket proxy trust. Restrict PostgreSQL, Redis, and `/metrics` to private networks.
 
-After Vercel gives you its final domain, set the Render `FRONTEND_ORIGIN` to that exact HTTPS origin and redeploy the API. Express and Socket.IO both allow that origin with credentials. In production the Twitch login session cookie is `Secure` and `SameSite=None` so the Vercel app can call the separate Render API. OAuth state remains an HttpOnly, SameSite=Lax cookie for the Twitch callback.
+## Migrating the old local SQLite file
 
-Verify the health endpoint, load the Vercel page, complete Connect Twitch, verify a guardian invite, and trigger/acknowledge a test SOS. Confirm the guardian history survives a Render restart. Keep `DEMO_MODE=false` and `VITE_DEMO_MODE=false` on every public deployment. The sample invite and seeded feed are demo-only, and FULE is a hackathon prototype, not an emergency service.
+Back up the old SQLite database. With `DATABASE_URL` set in `backend/.env`, run:
 
-## Railway alternative
+```powershell
+npm --prefix backend run migrate:sqlite -- "backend/data/incidents.sqlite"
+```
 
-For Railway, deploy `backend/` as the service root with `npm ci` / `npm start`, attach a persistent volume at `/data`, and set `FULE_DATA_DIR=/data`, `PORT` from Railway's runtime, `FRONTEND_ORIGIN`, OAuth settings, and `DEMO_MODE=false`. Deploy `frontend/` to Vercel with the Railway HTTPS service URL as `VITE_API_URL`. Add the exact callback URL from the Railway domain to Twitch. Keep a persistent volume attached: SQLite data on an ephemeral container filesystem will not survive replacement.
+The import copies incident payloads, trusted contacts, false-alarm counts, and the adjacent `audit.jsonl` if present. Verify row counts and representative privacy fields before retiring the source file. The migration does not delete or modify the SQLite source.
+
+## Local services
+
+```powershell
+Copy-Item .env.example .env
+Copy-Item .env.example backend/.env
+docker compose up --build
+```
+
+The local Compose environment is explicitly a demo setup. It uses local-only credentials and simulated dispatch. Replace every placeholder before deploying anything reachable from the public internet.

@@ -1,4 +1,5 @@
 import { randomBytes, timingSafeEqual } from 'node:crypto';
+import jwt from 'jsonwebtoken';
 
 const API = 'https://api.twitch.tv/helix';
 const AUTH = 'https://id.twitch.tv/oauth2';
@@ -24,13 +25,15 @@ export class TwitchIntegration {
     clientId, clientSecret, redirectUri, onSos, onSafe, rewardId = '', rewardCost = 1,
     fetchImpl = fetch, WebSocketImpl = WebSocket, onConnectionState = () => {},
     sleepImpl = sleep, now = () => Date.now(), reconnectBaseMs = 1000,
-    reconnectMaxMs = 60_000, clipWaitMs = 10_000, clipPollMs = 1000
+    reconnectMaxMs = 60_000, clipWaitMs = 10_000, clipPollMs = 1000, persistence = null
   } = {}) {
     Object.assign(this, {
       clientId, clientSecret, redirectUri, onSos, onSafe, rewardId,
       rewardCost, fetchImpl, WebSocketImpl, onConnectionState, sleepImpl,
       now, reconnectBaseMs, reconnectMaxMs, clipWaitMs, clipPollMs
     });
+    this.persistence = persistence;
+    this.sessionSecret = process.env.JWT_ACCESS_SECRET || 'development-only-secret-change-this-before-production';
     this.states = new Map();
     this.sessions = new Map();
     this.accounts = new Map();
@@ -39,6 +42,17 @@ export class TwitchIntegration {
     this.pendingConnections = new Map();
     this.reconnectAttempts = new Map();
     this.reconnectTimers = new Map();
+    this.leaseTimers = new Map();
+  }
+
+  async hydrate() {
+    if (!this.persistence?.durable) return;
+    const accounts = await this.persistence.loadAccounts();
+    for (const account of accounts) {
+      account.refreshing = null;
+      this.accounts.set(account.id, account);
+      if (this.configured()) this.connectEvents(account).catch((error) => this.recordState(account.id, 'connection_start_failed', error.message));
+    }
   }
 
   configured() { return Boolean(this.clientId && this.clientSecret && this.redirectUri); }
@@ -52,12 +66,28 @@ export class TwitchIntegration {
     return state;
   }
 
+  async createLoginState() {
+    if (!this.persistence?.durable) return this.createState();
+    const state = randomBytes(24).toString('hex');
+    if (!await this.persistence.saveOAuthState(state)) throw new Error('Unable to store Twitch authorization state.');
+    return state;
+  }
+
   consumeState(value, browserBinding) {
     const expires = this.states.get(value);
     this.states.delete(value);
     if (!expires || expires <= this.now() || typeof value !== 'string' || typeof browserBinding !== 'string') return false;
     const candidate = Buffer.from(value);
     const expected = Buffer.from(browserBinding);
+    return candidate.length === expected.length && timingSafeEqual(candidate, expected);
+  }
+
+  async consumeLoginState(value, browserBinding) {
+    if (!this.persistence?.durable) return this.consumeState(value, browserBinding);
+    let consumed = false;
+    try { consumed = await this.persistence.consumeOAuthState(String(value || '')); } catch { return false; }
+    if (!consumed || typeof value !== 'string' || typeof browserBinding !== 'string') return false;
+    const candidate = Buffer.from(value); const expected = Buffer.from(browserBinding);
     return candidate.length === expected.length && timingSafeEqual(candidate, expected);
   }
 
@@ -141,9 +171,13 @@ export class TwitchIntegration {
     const existingAccount = this.accounts.get(user.id);
     const account = existingAccount ? Object.assign(existingAccount, accountData) : accountData;
     account.refreshing ??= null;
+    account.authVersion ??= 0;
+    await this.persistence?.saveAccount(account);
     this.accounts.set(user.id, account);
-    const session = randomBytes(32).toString('base64url');
-    this.sessions.set(session, { userId: user.id, expiresAt: this.now() + 7 * 24 * 60 * 60 * 1000 });
+    const session = this.persistence?.durable
+      ? jwt.sign({ sub: user.id, ver: account.authVersion, kind: 'twitch' }, this.sessionSecret, { expiresIn: '10m', issuer: 'fule' })
+      : randomBytes(32).toString('base64url');
+    if (!this.persistence?.durable) this.sessions.set(session, { userId: user.id, expiresAt: this.now() + 7 * 24 * 60 * 60 * 1000 });
 
     if (!this.connections.has(user.id) && !this.pendingConnections.has(user.id)) {
       this.connectEvents(account).catch((error) => this.recordState(user.id, 'connection_start_failed', error.message));
@@ -156,12 +190,20 @@ export class TwitchIntegration {
   }
 
   session(sessionId) {
-    const stored = this.sessions.get(sessionId);
-    if (!stored || stored.expiresAt <= this.now()) {
-      this.sessions.delete(sessionId);
-      return null;
+    let userId;
+    if (this.persistence?.durable) {
+      try { const payload = jwt.verify(String(sessionId || ''), this.sessionSecret, { issuer: 'fule' }); if (payload.kind !== 'twitch') return null; userId = payload.sub; }
+      catch { return null; }
+    } else {
+      const stored = this.sessions.get(sessionId);
+      if (!stored || stored.expiresAt <= this.now()) { this.sessions.delete(sessionId); return null; }
+      userId = stored.userId;
     }
-    const account = this.accounts.get(stored.userId);
+    const account = this.accounts.get(userId);
+    if (this.persistence?.durable) {
+      try { const payload = jwt.verify(String(sessionId || ''), this.sessionSecret, { issuer: 'fule' }); if (payload.ver !== (account?.authVersion || 0)) return null; }
+      catch { return null; }
+    }
     return account ? {
       id: account.id,
       login: account.login,
@@ -170,7 +212,29 @@ export class TwitchIntegration {
     } : null;
   }
 
-  logout(sessionId) {
+  async sessionAsync(sessionId) {
+    if (!this.persistence?.durable) return this.session(sessionId);
+    let payload;
+    try { payload = jwt.verify(String(sessionId || ''), this.sessionSecret, { issuer: 'fule' }); }
+    catch { return null; }
+    if (payload.kind !== 'twitch' || typeof payload.sub !== 'string') return null;
+    const stored = await this.persistence.loadAccount(payload.sub);
+    if (!stored || payload.ver !== (stored.authVersion || 0)) return null;
+    stored.refreshing = null;
+    this.accounts.set(stored.id, stored);
+    return this.session(sessionId);
+  }
+
+  async logout(sessionId) {
+    if (this.persistence?.durable) {
+      try {
+        const payload = jwt.verify(String(sessionId || ''), this.sessionSecret, { issuer: 'fule' });
+        if (payload.kind !== 'twitch') return;
+        this.disconnectAccount(payload.sub);
+        await this.persistence.removeAccount(payload.sub);
+      } catch { /* Expired or invalid session is already logged out. */ }
+      return;
+    }
     const stored = this.sessions.get(sessionId);
     this.sessions.delete(sessionId);
     if (!stored) return;
@@ -179,6 +243,10 @@ export class TwitchIntegration {
   }
 
   disconnectAccount(userId) {
+    const leaseTimer = this.leaseTimers.get(userId);
+    if (leaseTimer) clearInterval(leaseTimer);
+    this.leaseTimers.delete(userId);
+    if (this.persistence?.durable) void this.persistence.releaseEventSub(userId);
     const connection = this.connections.get(userId);
     if (connection) {
       connection.intentional = true;
@@ -197,6 +265,19 @@ export class TwitchIntegration {
     this.reconnectAttempts.delete(userId);
     this.accounts.delete(userId);
     this.recordState(userId, 'disconnected', 'Streamer logged out');
+  }
+
+  async shutdown() {
+    const ids = [...this.accounts.keys()];
+    for (const id of ids) {
+      for (const connection of [this.connections.get(id), this.pendingConnections.get(id)]) {
+        if (connection) { connection.intentional = true; connection.ws.close(); }
+      }
+      const timer = this.leaseTimers.get(id);
+      if (timer) clearInterval(timer);
+    }
+    this.connections.clear(); this.pendingConnections.clear(); this.leaseTimers.clear();
+    if (this.persistence?.durable) await this.persistence.releaseAllEventSub(ids);
   }
 
   recordState(userId, status, details = '') {
@@ -226,6 +307,7 @@ export class TwitchIntegration {
         expiresAt: this.now() + Number(next.expires_in || 0) * 1000,
         scopes: Array.isArray(next.scope) ? next.scope : account.scopes
       });
+      await this.persistence?.saveAccount(account);
       return account.accessToken;
     })().finally(() => { account.refreshing = null; });
     return account.refreshing;
@@ -250,6 +332,7 @@ export class TwitchIntegration {
       || rewards.find((reward) => String(reward.title || '').trim().toLowerCase() === SILENT_SOS_TITLE.toLowerCase());
     if (existing) {
       account.rewardId = existing.id;
+      await this.persistence?.saveAccount(account);
       return existing.id;
     }
 
@@ -268,6 +351,7 @@ export class TwitchIntegration {
     const reward = (await created.json()).data?.[0];
     if (!reward?.id) throw new Error('Twitch created the reward without returning its ID');
     account.rewardId = reward.id;
+    await this.persistence?.saveAccount(account);
     return reward.id;
   }
 
@@ -296,7 +380,39 @@ export class TwitchIntegration {
     return null;
   }
 
+  startLeaseRenewal(account) {
+    if (!this.persistence?.durable || this.leaseTimers.has(account.id)) return;
+    const timer = setInterval(async () => {
+      try {
+        if (await this.persistence.renewEventSub(account.id)) return;
+        clearInterval(timer); this.leaseTimers.delete(account.id);
+        for (const connection of [this.connections.get(account.id), this.pendingConnections.get(account.id)]) {
+          if (connection) { connection.intentional = true; connection.ws.close(); }
+        }
+        this.connections.delete(account.id); this.pendingConnections.delete(account.id);
+        this.recordState(account.id, 'eventsub_lease_lost', 'EventSub ownership moved to another instance');
+        this.scheduleReconnect(account);
+      } catch (error) {
+        clearInterval(timer); this.leaseTimers.delete(account.id);
+        for (const connection of [this.connections.get(account.id), this.pendingConnections.get(account.id)]) {
+          if (connection) { connection.intentional = true; connection.ws.close(); }
+        }
+        this.connections.delete(account.id); this.pendingConnections.delete(account.id);
+        this.recordState(account.id, 'eventsub_lease_renew_failed', error.message);
+        this.scheduleReconnect(account);
+      }
+    }, 10_000);
+    timer.unref?.();
+    this.leaseTimers.set(account.id, timer);
+  }
+
   async connectEvents(account, url = EVENTSUB_URL, { handoff = false, previous = null } = {}) {
+    if (this.persistence?.durable) {
+      let owns = await this.persistence.ownsEventSub(account.id);
+      if (!owns) owns = await this.persistence.claimEventSub(account.id);
+      if (!owns) { this.recordState(account.id, 'eventsub_owned_by_peer', 'Another API instance owns this broadcaster EventSub connection'); this.scheduleReconnect(account); return null; }
+      this.startLeaseRenewal(account);
+    }
     let ws;
     try { ws = new this.WebSocketImpl(url); }
     catch (error) {

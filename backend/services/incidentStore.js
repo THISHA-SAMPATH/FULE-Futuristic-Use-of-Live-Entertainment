@@ -1,75 +1,55 @@
-import { mkdirSync } from 'node:fs';
-import { resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { DatabaseSync } from 'node:sqlite';
+import { createIncidentRepository } from './incidentRepository.js';
+import { log } from './securityMetrics.js';
 
-const dataDirectory = resolve(process.env.FULE_DATA_DIR || fileURLToPath(new URL('../data/', import.meta.url)));
-mkdirSync(dataDirectory, { recursive: true });
-const databasePath = resolve(dataDirectory, 'incidents.sqlite');
-const database = new DatabaseSync(databasePath);
-database.exec(`
-  PRAGMA journal_mode = WAL;
-  PRAGMA foreign_keys = ON;
-  CREATE TABLE IF NOT EXISTS incidents (
-    incident_id TEXT PRIMARY KEY,
-    created_at TEXT NOT NULL,
-    status TEXT NOT NULL,
-    payload TEXT NOT NULL
-  );
-  CREATE TABLE IF NOT EXISTS trusted_contacts (
-    streamer_id TEXT PRIMARY KEY,
-    contacts TEXT NOT NULL DEFAULT '[]'
-  );
-  CREATE TABLE IF NOT EXISTS false_alarm_counts (
-    streamer_id TEXT PRIMARY KEY,
-    count INTEGER NOT NULL DEFAULT 0,
-    updated_at TEXT NOT NULL
-  );
-  CREATE INDEX IF NOT EXISTS incidents_created_at ON incidents(created_at DESC);
-`);
+export const incidentRepository = createIncidentRepository();
+await incidentRepository.initialize();
+const incidentCache = new Map((incidentRepository.db ? await incidentRepository.loadActiveIncidents() : await incidentRepository.loadIncidents()).map((incident) => [incident.incident_id, incident]));
+const trustedContactCache = new Map(incidentRepository.db ? [] : Object.entries(await incidentRepository.loadAllTrustedContacts()));
+const falseAlarmCache = new Map(incidentRepository.db ? [] : Object.entries(await incidentRepository.loadFalseAlarmCounts()).map(([id, count]) => [id, Number(count)]));
+let pendingWrites = Promise.resolve();
 
-const saveStatement = database.prepare(`
-  INSERT INTO incidents (incident_id, created_at, status, payload)
-  VALUES (?, ?, ?, ?)
-  ON CONFLICT(incident_id) DO UPDATE SET
-    created_at = excluded.created_at,
-    status = excluded.status,
-    payload = excluded.payload
-`);
-const deleteStatement = database.prepare('DELETE FROM incidents WHERE incident_id = ?');
-const getContactsStatement = database.prepare('SELECT contacts FROM trusted_contacts WHERE streamer_id = ?');
-const saveContactsStatement = database.prepare('INSERT INTO trusted_contacts(streamer_id, contacts) VALUES (?, ?) ON CONFLICT(streamer_id) DO UPDATE SET contacts=excluded.contacts');
-const incrementFalseAlarmsStatement = database.prepare(`INSERT INTO false_alarm_counts(streamer_id, count, updated_at) VALUES (?, 1, ?)
-  ON CONFLICT(streamer_id) DO UPDATE SET count=count+1, updated_at=excluded.updated_at`);
-
-export function loadIncidents() {
-  return database.prepare('SELECT payload FROM incidents ORDER BY created_at DESC').all()
-    .map(({ payload }) => JSON.parse(payload));
+function enqueue(operation) {
+  pendingWrites = pendingWrites.then(operation).catch((error) => { log('error', 'repository_write_failed', { error: error.message }); });
+  return pendingWrites;
 }
 
+export function loadIncidents() { return [...incidentCache.values()].sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at)); }
+export async function getIncident(incidentId) {
+  const incident = await incidentRepository.loadIncident(incidentId);
+  if (incident) incidentCache.set(incidentId, incident);
+  return incident || incidentCache.get(incidentId) || null;
+}
+export async function listIncidentPage({ limit = 100, offset = 0 } = {}) { return incidentRepository.listIncidents({ limit, offset }); }
+export async function listDispatchQueue({ limit = 100 } = {}) { return incidentRepository.listDispatchQueue({ limit }); }
 export function persistIncident(incident) {
-  saveStatement.run(incident.incident_id, incident.created_at, incident.status, JSON.stringify(incident));
+  incidentCache.set(incident.incident_id, incident);
+  return enqueue(() => incidentRepository.persistIncident(incident));
 }
-
 export function removeIncident(incidentId) {
-  deleteStatement.run(incidentId);
+  incidentCache.delete(incidentId);
+  return enqueue(() => incidentRepository.removeIncident(incidentId));
 }
-
-export function loadTrustedContacts(streamerId) {
-  const value = getContactsStatement.get(streamerId)?.contacts;
-  return value ? JSON.parse(value) : [];
-}
-
-export function saveTrustedContacts(streamerId, contacts) {
-  saveContactsStatement.run(streamerId, JSON.stringify(contacts));
+export function loadTrustedContacts(streamerId) { return trustedContactCache.get(streamerId) || []; }
+export async function loadTrustedContactsFresh(streamerId) {
+  const contacts = await incidentRepository.loadTrustedContacts(streamerId);
+  trustedContactCache.set(streamerId, contacts);
   return contacts;
 }
-
-export function recordFalseAlarm(streamerId) {
-  incrementFalseAlarmsStatement.run(streamerId, new Date().toISOString());
-  return database.prepare('SELECT count FROM false_alarm_counts WHERE streamer_id = ?').get(streamerId)?.count || 0;
+export function saveTrustedContacts(streamerId, contacts) {
+  trustedContactCache.set(streamerId, contacts);
+  return enqueue(() => incidentRepository.saveTrustedContacts(streamerId, contacts));
 }
-
-export function closeIncidentStore() {
-  database.close();
+export async function recordFalseAlarm(streamerId) {
+  const count = await incidentRepository.recordFalseAlarm(streamerId);
+  falseAlarmCache.set(streamerId, count);
+  return count;
 }
+export function appendRepositoryAudit(entry) { return enqueue(() => incidentRepository.appendAudit(entry)); }
+export async function flushIncidentWrites() { await pendingWrites; }
+export async function cleanupIncidentData(retentionDays = Number(process.env.INCIDENT_RETENTION_DAYS) || 90) {
+  const cutoff = new Date(Date.now() - retentionDays * 86_400_000);
+  for (const [id, incident] of incidentCache) if (Date.parse(incident.created_at) < cutoff.getTime()) incidentCache.delete(id);
+  await incidentRepository.cleanupBefore(cutoff);
+  return cutoff;
+}
+export async function closeIncidentStore() { await flushIncidentWrites(); await incidentRepository.close(); }

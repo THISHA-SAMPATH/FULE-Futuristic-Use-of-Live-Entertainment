@@ -7,9 +7,11 @@ FULE is a Twitch centered women's safety and civic guardian network. The primary
 ## Architecture
 
 - `frontend/`: React + Vite streamer and guardian dashboard. Socket.IO client receives incident events.
-- `backend/`: Node.js + Express API, OpenAI Responses API adapter with a deterministic demo fallback, and Socket.IO server.
+- `backend/`: Node.js + Express API, OpenAI Responses API adapter with a deterministic demo fallback, Socket.IO, PostgreSQL/Knex production repository, Redis adapter/limits, and BullMQ escalation jobs. Local tests/demos can use the JSON repository without external services.
 - `shared/incident.mjs`: shared incident fields, normalization, and public redaction helpers imported by both frontend and backend.
+- Production data uses PostgreSQL (`DATABASE_URL`) and Redis (`REDIS_URL`); production startup fails closed without both. Apply migrations with `npm --prefix backend run migrate:latest`.
 - Precise coordinates are guardian-only. Public incident notices must use coarse coordinates and a generic summary.
+- Auth uses bcrypt password hashes, short-lived JWTs, rotating refresh tokens, and admin approval for guardians. Legacy invite authentication is demo-only.
 
 ## Run commands
 
