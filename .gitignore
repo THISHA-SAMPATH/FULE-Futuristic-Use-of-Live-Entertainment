@@ -1,6 +1,7 @@
 node_modules/
 **/node_modules/
 **/.npm-cache/
+frontend/.playwright-browsers/
 backend/data/guardians.json
 backend/data/audit.jsonl
 backend/data/incidents.sqlite*

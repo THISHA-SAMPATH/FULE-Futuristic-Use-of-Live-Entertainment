@@ -3,7 +3,6 @@ import { io } from 'socket.io-client';
 import { Activity, ArrowLeft, BadgeCheck, Check, Clock3, MapPin, Radio, ShieldAlert, Siren, TriangleAlert, Truck } from 'lucide-react';
 import { API_URL } from '../config.js';
 import { twitchPlayerUrl } from '../streamAccess.js';
-import './DispatchConsole.css';
 
 const TOKEN_KEY = 'fuleGuardianToken';
 const activeDispatch = (incident) => incident?.dispatch_record && !['RESOLVED', 'STAND_DOWN'].includes(incident.dispatch_stage);

@@ -3,8 +3,7 @@ import { AlertOctagon, Siren, X } from 'lucide-react';
 import { createSosClickHandler } from '../sosFlow.js';
 
 export function SosButton({ onClick, sending, active }) {
-  const reduceMotion = useReducedMotion();
-  return <motion.button className="floating-sos" onClick={createSosClickHandler(onClick)} disabled={sending || active} aria-label={active ? 'An SOS incident is active' : 'Trigger an emergency SOS'} animate={reduceMotion || active ? undefined : { scale: [1, 1.045, 1] }} transition={{ duration: 1.7, repeat: Infinity, ease: 'easeInOut' }}><Siren size={22}/><span>{sending ? 'SENDING' : active ? 'SOS ACTIVE' : 'SOS'}</span></motion.button>;
+  return <button className={`floating-sos ${active ? 'is-active' : ''}`} onClick={createSosClickHandler(onClick)} disabled={sending || active} aria-label={active ? 'An SOS incident is active' : 'Trigger an emergency SOS'}><Siren size={22}/><span>{sending ? 'Sending' : active ? 'SOS active' : 'SOS'}</span></button>;
 }
 
 export function CancelToast({ incident, seconds, onCancel, onStandDown }) {

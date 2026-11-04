@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react';
 import { UserPlus, X } from 'lucide-react';
 import { API_URL } from '../config.js';
-import './TrustedContacts.css';
 
 export default function TrustedContacts({ streamerId, connected, demoMode = false }) {
   const [contacts, setContacts] = useState([]);

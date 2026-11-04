@@ -1,6 +1,5 @@
 import { useState } from 'react';
 import { Check, Clock3, Copy, PhoneCall, Radio, ShieldCheck, UsersRound } from 'lucide-react';
-import './DispatchTimeline.css';
 
 export function DispatchTimeline({ incident }) {
   if (!incident) return null;

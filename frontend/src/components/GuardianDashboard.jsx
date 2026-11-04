@@ -4,7 +4,6 @@ import { Activity, ArrowUpRight, Check, Clock3, LoaderCircle, MapPin, Radio, Shi
 import { isIncident } from '../../../shared/incident.mjs';
 import { API_URL } from '../config.js';
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
-import './GuardianDashboard.css';
 import { DispatchTimeline, OperatorBrief } from './DispatchTimeline.jsx';
 
 function elapsedTime(date, now) {
@@ -197,7 +196,7 @@ export default function GuardianDashboard({ search = '', onIncidentsChange, onRo
               <p className="alert-summary">{alert.summary}</p>
               <div className="alert-location"><MapPin size={14}/><span>{address}</span></div>
               {hasPreciseLocation && <div className="guardian-precise-location"><span>VERIFIED GUARDIAN · EXACT PIN</span><strong>{alert.location.lat}, {alert.location.lng}</strong><a href={pin} aria-label={`Open exact map pin for incident ${alert.incident_id}`}><MapPin size={13}/>Open map pin</a></div>}
-              {activeStatus && <div className="escalation-countdown" role="timer" aria-label={countdown ? `Escalation in ${countdown} seconds` : 'Escalation is due'}><span><Clock3 size={13}/>ESCALATION</span><strong>{countdown ? `00:${String(countdown).padStart(2, '0')}` : 'DUE'}</strong></div>}
+              {activeStatus && <div className="escalation-countdown" style={{ '--escalation-progress': `${Math.min(100, countdown / 60 * 100)}%` }} role="timer" aria-label={countdown ? `Escalation in ${countdown} seconds` : 'Escalation is due'}><span><Clock3 size={13}/>Escalation</span><strong>{countdown ? `00:${String(countdown).padStart(2, '0')}` : 'Due'}</strong></div>}
               <DispatchTimeline incident={alert}/>
               <OperatorBrief incident={alert} compact privateLocation={role === 'guardian'}/>
               <div className="alert-meta"><span>{alert.source.toUpperCase()} · {alert.status.replaceAll('_', ' ')}</span>{alert.clip_url && <a href={alert.clip_url} target="_blank" rel="noreferrer" aria-label="Open clip evidence">CLIP EVIDENCE <ArrowUpRight size={12}/></a>}{role === 'guardian' && !alert.demo && <button type="button" onClick={() => downloadCaseFile(alert)}>CASE FILE</button>}</div>
