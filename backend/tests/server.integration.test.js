@@ -98,6 +98,9 @@ before(async () => {
       PORT: String(port),
       FRONTEND_ORIGIN: origin,
       DEMO_MODE: 'true',
+      TWITCH_CLIENT_ID: 'integration-client-id',
+      TWITCH_CLIENT_SECRET: 'integration-client-secret',
+      TWITCH_REDIRECT_URI: `${origin}/auth/twitch/callback`,
       FULE_DEMO_GUARDIAN_INVITE: guardianInvite,
       FULE_DATA_DIR: dataDir,
       FULE_DISPATCH_GRACE_MS: '600',
@@ -123,6 +126,33 @@ test('SOS create route accepts every supported module', async () => {
     const body = await response.json();
     assert.equal(body.incident.module, module_type);
   }
+});
+
+test('Twitch OAuth route redirects with scopes and browser-bound one-time state', async () => {
+  const start = await fetch(`${origin}/auth/twitch`, { redirect: 'manual' });
+  assert.equal(start.status, 302);
+  const authorization = new URL(start.headers.get('location'));
+  assert.equal(authorization.origin, 'https://id.twitch.tv');
+  assert.equal(authorization.pathname, '/oauth2/authorize');
+  assert.equal(authorization.searchParams.get('client_id'), 'integration-client-id');
+  assert.equal(authorization.searchParams.get('response_type'), 'code');
+  assert.equal(authorization.searchParams.get('redirect_uri'), `${origin}/auth/twitch/callback`);
+  assert.ok(authorization.searchParams.get('scope').includes('user:read:chat'));
+  assert.ok(authorization.searchParams.get('scope').includes('channel:read:redemptions'));
+  assert.ok(authorization.searchParams.get('scope').includes('clips:edit'));
+  assert.ok(authorization.searchParams.get('scope').includes('channel:manage:redemptions'));
+  const setCookie = start.headers.get('set-cookie') || '';
+  const boundState = setCookie.match(/fule_twitch_oauth_state=([^;]+)/)?.[1];
+  assert.equal(boundState, authorization.searchParams.get('state'));
+  assert.match(setCookie, /HttpOnly/i);
+  assert.match(setCookie, /SameSite=Lax/i);
+
+  const callback = new URL(`${origin}/auth/twitch/callback`);
+  callback.searchParams.set('state', authorization.searchParams.get('state'));
+  callback.searchParams.set('error', 'access_denied');
+  const forged = await fetch(callback, { headers: { Cookie: 'fule_twitch_oauth_state=wrong-browser' } });
+  assert.equal(forged.status, 400);
+  assert.match(await forged.text(), /Invalid or expired Twitch authorization state/);
 });
 
 test('guardian receives exact incident while public room receives redacted event', async () => {

@@ -67,7 +67,7 @@ export default function GuardianDashboard({ search = '', onIncidentsChange, onRo
     };
     socket.on('sos_activated', upsert);
     socket.on('incident:public', (incident) => { if (roleRef.current !== 'guardian') upsert(incident); });
-    for (const event of ['incident_acknowledged', 'incident_dispatch_ready', 'incident_escalated', 'sos_cancelled', 'incident_clip_ready']) socket.on(event, upsert);
+    for (const event of ['incident_acknowledged', 'incident_dispatch_ready', 'incident_escalated', 'incident_updated', 'sos_cancelled', 'incident_clip_ready']) socket.on(event, upsert);
     socket.on('incident:public:update', (update) => publishAlerts((current) => current.map((item) => item.incident_id === update.incident_id ? { ...item, ...update } : item)));
     const tick = window.setInterval(() => setNow(Date.now()), 1000);
     return () => { window.clearInterval(tick); socket.disconnect(); };

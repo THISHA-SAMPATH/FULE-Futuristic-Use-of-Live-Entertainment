@@ -15,6 +15,7 @@ import useLoudAlarm from './hooks/useLoudAlarm.js';
 import { DEMO_NETWORK, DEMO_STREAMS } from './demo/seedData.js';
 import { API_URL } from './config.js';
 import { submitSos } from './sosFlow.js';
+import { selectFeaturedStream } from './streamAccess.js';
 import './App.css';
 
 const DEMO_MODE = import.meta.env.VITE_DEMO_MODE === 'true';
@@ -74,7 +75,7 @@ export default function App() {
     return incidents.filter((item) => [item.summary, item.location?.address, item.status, item.threat_level].some((value) => String(value || '').toLowerCase().includes(query)));
   }, [incidents, search]);
   const activeCount = [...incidents, ...demoAlerts].filter((item) => ['PENDING_DISPATCH', 'DISPATCHING', 'ESCALATED'].includes(item.status)).length;
-  const featuredStream = DEMO_MODE ? DEMO_STREAMS[0] : filteredIncidents.find((item) => item.stream_url) || (twitchUser ? { id: twitchUser.id, title: `Live from ${twitchUser.login}`, streamer: twitchUser.login, initials: twitchUser.login.slice(0, 1).toUpperCase(), region: 'Location protected', stream_url: `https://www.twitch.tv/${twitchUser.login}` } : null);
+  const featuredStream = selectFeaturedStream({ demoMode: DEMO_MODE, role, incidents, demoStream: DEMO_STREAMS[0] });
   const networkStats = DEMO_MODE ? DEMO_NETWORK : null;
 
   function joinAsGuardian() {

@@ -47,6 +47,7 @@ const timers = new Map();
 const inviteAttempts = new Map();
 const streamerLocations = new Map();
 const sessionCookie = 'fule_twitch_session';
+const oauthStateCookie = 'fule_twitch_oauth_state';
 const requestBuckets = new Map();
 const creatingIncidents = new Set();
 const socketConnectionsByIp = new Map();
@@ -137,6 +138,13 @@ function getTwitchUser(req) {
   const cookie = String(req.headers.cookie || '').split(';').map((item) => item.trim()).find((item) => item.startsWith(`${sessionCookie}=`));
   if (!cookie) return null;
   try { return twitch.session(decodeURIComponent(cookie.slice(sessionCookie.length + 1))); }
+  catch { return null; }
+}
+
+function getCookie(req, name) {
+  const pair = String(req.headers.cookie || '').split(';').map((item) => item.trim()).find((item) => item.startsWith(`${name}=`));
+  if (!pair) return null;
+  try { return decodeURIComponent(pair.slice(name.length + 1)); }
   catch { return null; }
 }
 
@@ -271,6 +279,10 @@ const twitch = new TwitchIntegration({
   clientId: process.env.TWITCH_CLIENT_ID, clientSecret: process.env.TWITCH_CLIENT_SECRET,
   redirectUri: process.env.TWITCH_REDIRECT_URI || 'http://localhost:4000/auth/twitch/callback',
   rewardId: process.env.TWITCH_SILENT_SOS_REWARD_ID || '',
+  rewardCost: process.env.TWITCH_SILENT_SOS_COST || 1,
+  onConnectionState: ({ user_id, status, details }) => writeAudit({
+    event: 'TWITCH_EVENTSUB_CONNECTION_STATE', actor_id: user_id, details: `${status}: ${details}`
+  }),
   onSos: async ({ streamer_id, source, audio_transcript_snippet }) => {
     const savedLocation = streamerLocations.get(streamer_id);
     const location = savedLocation && Date.now() - savedLocation.updatedAt < 10 * 60_000
@@ -376,11 +388,15 @@ app.get('/api/health', (_req, res) => {
 app.get('/auth/twitch', (_req, res) => {
   if (!twitch.configured()) return res.status(503).send('Twitch OAuth is not configured. Set backend Twitch credentials.');
   const state = twitch.createState();
+  res.cookie(oauthStateCookie, state, { httpOnly: true, sameSite: 'lax', secure: parsedAllowedOrigin.protocol === 'https:', maxAge: 10 * 60 * 1000, path: '/auth/twitch/callback' });
   res.redirect(twitch.loginUrl(state));
 });
 
 app.get('/auth/twitch/callback', async (req, res) => {
-  if (!twitch.consumeState(String(req.query.state || ''))) return res.status(400).send('Invalid or expired Twitch OAuth state.');
+  const state = String(req.query.state || '');
+  const validState = twitch.consumeState(state, getCookie(req, oauthStateCookie));
+  res.clearCookie(oauthStateCookie, { httpOnly: true, sameSite: 'lax', secure: parsedAllowedOrigin.protocol === 'https:', path: '/auth/twitch/callback' });
+  if (!validState) return res.status(400).send('Invalid or expired Twitch authorization state.');
   if (req.query.error || typeof req.query.code !== 'string') return res.status(400).send('Twitch authorization was not completed.');
   try {
     const result = await twitch.finishLogin(req.query.code);
@@ -389,7 +405,11 @@ app.get('/auth/twitch/callback', async (req, res) => {
   } catch (error) { console.error('Twitch login failed:', error.message); res.status(502).send('Twitch login failed.'); }
 });
 
-app.get('/api/twitch/session', (req, res) => res.json({ user: getTwitchUser(req) }));
+app.get('/api/twitch/session', (req, res) => {
+  const user = getTwitchUser(req);
+  const connection = user && twitch.connections.get(user.id);
+  return res.json({ user, eventsub_status: connection?.ready ? 'connected' : user ? 'connecting' : 'disconnected' });
+});
 app.post('/auth/twitch/logout', (req, res) => {
   const parsed = String(req.headers.cookie || '').split(';').map((item) => item.trim()).find((item) => item.startsWith(`${sessionCookie}=`));
   if (parsed) {

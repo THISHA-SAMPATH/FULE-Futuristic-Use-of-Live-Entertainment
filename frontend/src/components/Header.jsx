@@ -10,7 +10,7 @@ export default function Header({ search, onSearch, onTrigger, sending, active, u
     <div className="header-actions">
       <a className="notification-button" href="#alerts" aria-label={`${unreadCount} unread emergency alerts`}><Bell size={18}/>{unreadCount > 0 && <span>{unreadCount > 9 ? '9+' : unreadCount}</span>}</a>
       <motion.button className="header-sos" onClick={onTrigger} disabled={sending || active} aria-label="Start live SOS" animate={reduceMotion || active ? undefined : { boxShadow: ['0 0 0 0 #ff3b3030', '0 0 0 8px #ff3b3000'] }} transition={{ duration: 1.5, repeat: Infinity, ease: 'easeOut' }}><ShieldAlert size={17}/>{sending ? 'STARTING…' : active ? 'SOS ACTIVE' : 'START LIVE SOS'}</motion.button>
-      {user ? <button className="profile-button" aria-label={`Connected Twitch account ${user.login}`} title={user.login}><span>{user.login.slice(0, 1).toUpperCase()}</span></button> : <a className="connect-twitch" href={`${API_URL}/auth/twitch`}>Connect Twitch</a>}
+      {user ? <button className="profile-button" aria-label={`Connected Twitch channel ${user.login}`} title={user.login}>{user.profile_image_url ? <img src={user.profile_image_url} alt="" referrerPolicy="no-referrer"/> : <span className="profile-avatar-fallback">{user.login.slice(0, 1).toUpperCase()}</span>}<span className="profile-name">{user.login}</span></button> : <a className="connect-twitch" href={`${API_URL}/auth/twitch`}>Connect Twitch</a>}
     </div>
   </header>;
 }

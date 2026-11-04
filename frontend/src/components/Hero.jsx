@@ -1,14 +1,15 @@
 import { motion, useReducedMotion } from 'framer-motion';
 import { ArrowUpRight, Headphones, Radio, ShieldCheck, UsersRound } from 'lucide-react';
+import { twitchPlayerUrl } from '../streamAccess.js';
 
 function FeaturedPlayer({ stream, demoMode, active }) {
   const isRealStream = Boolean(stream?.stream_url);
-  const channel = stream?.stream_url?.split('/').filter(Boolean).pop();
-  const player = isRealStream ? `https://player.twitch.tv/?channel=${encodeURIComponent(channel)}&parent=${encodeURIComponent(window.location.hostname)}&muted=true` : null;
+  const liveIncident = Boolean(stream?.activeIncident || (active && isRealStream));
+  const player = isRealStream ? twitchPlayerUrl(stream.stream_url, window.location.hostname) : null;
   return <div className="featured-player">
     <div className="featured-art">
       {player ? <iframe src={player} title="Featured Twitch safety stream" allow="autoplay; fullscreen" allowFullScreen/> : demoMode ? <div className={`generated-scene scene-${stream?.scene || 'violet'}`} aria-hidden="true"><span className="scene-orbit orbit-a"/><span className="scene-orbit orbit-b"/><span className="scene-tower tower-a"/><span className="scene-tower tower-b"/><span className="scene-tower tower-c"/><span className="scene-horizon"/><span className="scene-person"/></div> : <div className="featured-empty"><Radio size={26}/><strong>No featured stream</strong><span>Connect Twitch or wait for a verified community feed.</span></div>}
-      <div className="player-glass"><span className={`live-pill ${demoMode || active ? 'is-live' : ''}`}><i/>{demoMode || active ? 'LIVE' : isRealStream ? 'CHANNEL' : 'OFFLINE'}</span><span className="player-caption">{stream?.title || (demoMode ? 'Community watch is live' : 'Live feed unavailable')}</span><span className="player-chapter"><Radio size={13}/>{demoMode ? 'SIMULATED FEED' : active ? 'INCIDENT FEED' : 'FEATURED CHANNEL'}</span></div>
+      <div className="player-glass"><span className={`live-pill ${demoMode || liveIncident ? 'is-live' : ''}`}><i/>{demoMode || liveIncident ? 'LIVE' : isRealStream ? 'CHANNEL' : 'OFFLINE'}</span><span className="player-caption">{stream?.title || (demoMode ? 'Community watch is live' : 'Live feed unavailable')}</span><span className="player-chapter"><Radio size={13}/>{demoMode ? 'SIMULATED FEED' : liveIncident ? 'LIVE EMERGENCY' : 'VERIFIED GUARDIAN FEED'}</span></div>
     </div>
     <div className="player-info"><div className="player-info-top"><span className="player-avatar">{stream?.initials || 'F'}</span><span className="player-streamer"><strong>{stream?.streamer || 'FULE Community'}</strong><small>{stream?.region || 'Safety network'}</small></span><span className="player-live-count"><i/>{stream?.viewers ? stream.viewers.toLocaleString() : '—'}<small>watching</small></span></div><div className="player-stats"><span><UsersRound size={14}/>{stream?.guardians ?? '—'} guardians nearby</span><span><Headphones size={14}/>Response time <b>{demoMode ? '00:08' : '—:—'}</b></span></div></div>
   </div>;
