@@ -2,10 +2,10 @@ import { Bell, Search, ShieldAlert } from 'lucide-react';
 import { motion, useReducedMotion } from 'framer-motion';
 import { API_URL } from '../config.js';
 
-export default function Header({ search, onSearch, onTrigger, sending, active, user, unreadCount }) {
+export default function Header({ search, onSearch, onTrigger, sending, active, user, unreadCount, demoMode = false }) {
   const reduceMotion = useReducedMotion();
   return <header className="top-header">
-    <a className="fule-logo" href="#home" aria-label="FULE home"><span className="fule-mark">F</span><span>FULE</span></a>
+    <div className="header-brand"><a className="fule-logo" href="#home" aria-label="FULE home"><span className="fule-mark">F</span><span>FULE</span></a>{demoMode && <span className="demo-mode-badge header-demo-badge">DEMO MODE</span>}</div>
     <label className="top-search"><Search size={17} aria-hidden="true"/><input aria-label="Search safety streams and alerts" placeholder="Search streams, guardians, alerts" value={search} onChange={(event) => onSearch(event.target.value)}/><kbd>/</kbd></label>
     <div className="header-actions">
       <a className="notification-button" href="#alerts" aria-label={`${unreadCount} unread emergency alerts`}><Bell size={18}/>{unreadCount > 0 && <span>{unreadCount > 9 ? '9+' : unreadCount}</span>}</a>

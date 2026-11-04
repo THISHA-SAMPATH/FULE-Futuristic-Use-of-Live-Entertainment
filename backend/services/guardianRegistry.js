@@ -1,9 +1,10 @@
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { resolve } from 'node:path';
 
-const dataDirectory = fileURLToPath(new URL('../data/', import.meta.url));
-const registryPath = fileURLToPath(new URL('../data/guardians.json', import.meta.url));
+const dataDirectory = resolve(process.env.FULE_DATA_DIR || fileURLToPath(new URL('../data/', import.meta.url)));
+const registryPath = resolve(dataDirectory, 'guardians.json');
 const SESSION_TTL_MS = 8 * 60 * 60 * 1000;
 const sessions = new Map();
 

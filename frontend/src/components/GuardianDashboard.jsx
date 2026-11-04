@@ -118,6 +118,8 @@ export default function GuardianDashboard({ search = '', onIncidentsChange, onRo
           : <AnimatePresence initial={false}>{visibleAlerts.map((alert) => {
             const threat = alert.threat_level;
             const address = alert.location?.address || 'Location unavailable';
+            const hasPreciseLocation = role === 'guardian' && Number.isFinite(alert.location?.lat) && Number.isFinite(alert.location?.lng);
+            const pin = hasPreciseLocation ? `geo:${alert.location.lat},${alert.location.lng}?q=${alert.location.lat},${alert.location.lng}` : null;
             const acknowledged = alert.status === 'ACKNOWLEDGED';
             const activeStatus = ['PENDING_DISPATCH', 'DISPATCHING', 'ESCALATED'].includes(alert.status);
             const countdown = escalationSeconds(alert.created_at, now);
@@ -127,6 +129,7 @@ export default function GuardianDashboard({ search = '', onIncidentsChange, onRo
               <div className="alert-category">{alert.module.replaceAll('_', ' ')}</div>
               <p className="alert-summary">{alert.summary}</p>
               <div className="alert-location"><MapPin size={14}/><span>{address}</span></div>
+              {hasPreciseLocation && <div className="guardian-precise-location"><span>VERIFIED GUARDIAN · EXACT PIN</span><strong>{alert.location.lat}, {alert.location.lng}</strong><a href={pin} aria-label={`Open exact map pin for incident ${alert.incident_id}`}><MapPin size={13}/>Open map pin</a></div>}
               {activeStatus && <div className="escalation-countdown" role="timer" aria-label={countdown ? `Escalation in ${countdown} seconds` : 'Escalation is due'}><span><Clock3 size={13}/>ESCALATION</span><strong>{countdown ? `00:${String(countdown).padStart(2, '0')}` : 'DUE'}</strong></div>}
               <div className="alert-meta"><span>{alert.source.toUpperCase()} · {alert.status.replaceAll('_', ' ')}</span>{alert.clip_url && <a href={alert.clip_url} target="_blank" rel="noreferrer" aria-label="Open clip evidence">CLIP EVIDENCE <ArrowUpRight size={12}/></a>}</div>
               {alert.escalated && <p className="alert-escalation-note">{alert.escalation_flag}</p>}

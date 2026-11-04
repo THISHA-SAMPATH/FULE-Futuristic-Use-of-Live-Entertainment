@@ -9,7 +9,7 @@ FULE is a Twitch centered women's safety and civic guardian network. FULE Protec
 ```text
 React + Vite ── POST /api/sos ──▶ Express ──▶ OpenAI structured synthesis
      │                               │            └── deterministic demo/offline fallback
-     │                               ├── verified guardians room: exact incident
+     │                               ├── verified guardians room: immediate provisional alert, then AI update
      │                               └── public room: coarse, redacted incident
      └── streamer cancel token ── Socket.IO false_alarm / cancel_sos
 
@@ -18,7 +18,7 @@ backend/data/guardians.json: hashed invite-code registry (ignored by git)
 backend/data/audit.jsonl: append-only state-change log (ignored by git)
 ```
 
-Precise coordinates are only sent to verified guardian sockets and the initiating streamer. Public clients receive rounded coordinates, a generic summary, and no clip or stream URL. Guardians verify with an invite code; the API returns a short-lived session token. SOS cancellation credentials are random, returned only to the requesting streamer, and required to register the streamer socket.
+Precise coordinates are only sent to verified guardian sockets and the initiating streamer. Before OpenAI synthesis, the backend rounds latitude and longitude to two decimal places. Public clients receive rounded coordinates, a generic summary, and no clip or stream URL. Guardians verify with an invite code; the API returns a short-lived session token. SOS cancellation credentials are random, returned only to the requesting streamer, and required to register the streamer socket.
 
 ## Quickstart
 
@@ -33,7 +33,7 @@ npm run dev
 
 Open [http://localhost:5173](http://localhost:5173). The backend listens on port 4000. Demo mode uses a deterministic summary and an offline stream stage; external Twitch or OpenAI access is optional.
 
-For the seeded dashboard, set `DEMO_MODE=true` in `backend/.env` and `VITE_DEMO_MODE=true` in `frontend/.env`. This fills the live stream, guardian, network, and anonymized alert sections with clearly labeled simulated data. Set both values to `false` to see the production empty/loading/error states.
+For the seeded dashboard, set `DEMO_MODE=true` in `backend/.env` and `VITE_DEMO_MODE=true` in `frontend/.env`. The START LIVE SOS and floating SOS buttons work without Twitch login or geolocation, using a synthetic `Demo Streamer` and synthetic coordinates. The **Demo Triggers** panel also sends simulated Button SOS, `!sos` chat, and Silent SOS redeem sources, with an editable transcript and scenario selector. All are clearly labeled simulated. Set both values to `false` to require Twitch login and browser geolocation and to see production empty/loading/error states.
 
 The development server uses strict ports so it reports conflicts instead of silently moving the frontend to a port rejected by the backend origin policy. If a previous FULE run is still listening, inspect and stop only the stale FULE PIDs in PowerShell:
 
@@ -52,17 +52,17 @@ The demo guardian invite code in `.env.example` is for local demonstration only.
 4. Create a Channel Points reward named **Silent SOS** in the Twitch channel. Optionally set its reward ID in `TWITCH_SILENT_SOS_REWARD_ID`. The signed-in broadcaster's EventSub WebSocket listens for broadcaster-authored `!sos`/`!safe` and the matching redemption. Messages from other chatters are ignored.
 5. Keep the FULE tab open and GPS simulator enabled to provide current simulated coordinates to the server. If an EventSub alert arrives without a location update, guardians see “Location unavailable”; FULE does not substitute a fabricated point. Twitch Create Clip is attempted after SOS and attached asynchronously when available. Offline/permission errors never delay the SOS.
 
-Twitch OAuth/EventSub need working credentials and internet. Without them, **DEMO TRIGGERS** simulate `!sos`, a Silent SOS redemption, and `!safe` through the same incident pipeline. Incident cards embed the live Twitch channel only in the verified guardian dashboard. Precise coordinates, summaries, stream URLs and clip evidence are sent only to the authenticated `guardians` room; public updates omit them.
+Twitch OAuth/EventSub need working credentials and internet. Without them, **Demo Triggers** simulate the button, `!sos`, and Silent SOS redemption source through the same incident pipeline. The synthetic demo coordinates and incidents are not real requests for help. Incident cards embed the live Twitch channel only for verified guardians. Precise coordinates, detailed summaries, stream URLs and clip evidence are sent only to the authenticated `guardians` room; public updates omit them.
 
 To connect the Twitch player, set `VITE_DEMO_MODE=false` and `VITE_TWITCH_CHANNEL=your_channel_name` in `frontend/.env`. The player `parent` is read from `window.location.hostname`. To enable OpenAI synthesis, set `OPENAI_API_KEY` in `backend/.env` and set `DEMO_MODE=false`. Without credentials or on API failure, a keyword-based deterministic fallback is used.
 
 ## 60-second demo
 
-1. **0–10 sec:** Open the dashboard and verify a guardian with the demo invite code.
-2. **10–20 sec:** Edit the simulated audio transcript to include an urgent phrase such as “someone is following me, please help”.
-3. **20–30 sec:** Click **START LIVE SOS STREAM**. The app creates the incident, emits `sos_activated` to verified guardians, and opens the 10-second cancel window.
-4. **30–45 sec:** Show the alarm summary and precise guardian map pin. The shared incident contains the threat, module, location, action, source, and status.
-5. **45–60 sec:** Click **ACKNOWLEDGE & DISPATCH**, or before the grace timer ends, use **FALSE ALARM** / **CANCEL SOS** as the initiating streamer. The audit log records the state change.
+1. **0–10 sec:** Open the dashboard and verify a guardian with the demo invite code from `.env.example`. Confirm the **DEMO MODE** badge.
+2. **10–20 sec:** In **Demo Triggers**, choose **Walking alone at night** and review/edit its clearly simulated transcript.
+3. **20–30 sec:** Click **Button SOS** (or try `!sos chat` / **Silent SOS redeem**). The request uses the same `/api/sos` pipeline; the incident immediately appears in the verified guardian panel and public feed remains anonymized.
+4. **30–45 sec:** Show the 10-second cancel toast, optional loud alarm toggle, and guardian-only exact map pin. Use **CANCEL SOS** during the grace window to reset before another source demo.
+5. **45–60 sec:** Trigger again and click **ACKNOWLEDGE & DISPATCH** as the verified guardian. The backend audits the state change. These simulated flows do not contact emergency services.
 
 ## API and events
 
@@ -86,6 +86,7 @@ Valid module types: `FULE_PROTECT`, `FULE_ACCOUNT`, `FULE_RESPOND`. Valid source
 - `GET /api/incidents` requires `Authorization: Bearer <access_token>` and returns full incidents.
 - `acknowledge_incident` is accepted only from a verified guardian. The server sets `acknowledged_by` from the guardian registry identity, then sends `incident_acknowledged` to guardians.
 - `false_alarm` and `cancel_sos` require a streamer socket registered with the incident's private cancellation token and are accepted only during the first 10 seconds.
+- A deterministic provisional incident is broadcast to guardians immediately; AI synthesis updates it later through `incident_updated`. OpenAI receives only two-decimal coordinates, has a hard eight-second deadline including retry, and falls back deterministically on missing credentials or failure. Blank-transcript button and redeem SOS defaults to `CRITICAL`.
 - After the grace period, dispatch becomes ready. If no guardian acknowledges within 30 seconds of SOS activation (including the grace period), the server sets `escalated: true`, adds the emergency-services reminder, audits the transition, and emits `incident_escalated`.
 - Public room events use the redacted incident projection; exact location is never sent to that room.
 
@@ -105,4 +106,4 @@ The generated code is printed once; only its SHA-256 hash is stored in the regis
 npm --prefix backend test
 ```
 
-Tests cover SOS validation, per-streamer rate limits, demo fallback, and OpenAI-error fallback.
+Backend tests cover route-level SOS creation for all supported modules, public and guardian data separation, guardian acknowledgement identity, streamer cancel and false-alarm paths, escalation, payload validation, per-streamer rate limits, demo fallback, OpenAI failure, rounded AI location, and the synthesis deadline. The frontend smoke test covers demo submission without login or browser geolocation and confirms that the synthetic identity, location, source, and transcript reach `/api/sos`.

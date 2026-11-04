@@ -1,8 +1,9 @@
 import { appendFileSync, mkdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { resolve } from 'node:path';
 
-const dataDirectory = fileURLToPath(new URL('../data/', import.meta.url));
-const auditPath = fileURLToPath(new URL('../data/audit.jsonl', import.meta.url));
+const dataDirectory = resolve(process.env.FULE_DATA_DIR || fileURLToPath(new URL('../data/', import.meta.url)));
+const auditPath = resolve(dataDirectory, 'audit.jsonl');
 
 export function writeAudit(entry) {
   mkdirSync(dataDirectory, { recursive: true });

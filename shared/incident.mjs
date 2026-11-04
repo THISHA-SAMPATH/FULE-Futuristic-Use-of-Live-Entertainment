@@ -106,7 +106,7 @@ export function isIncident(value) {
   if (!INCIDENT_SCHEMA.required.every((key) => Object.hasOwn(value, key))) return false;
   return typeof value.incident_id === 'string'
     && THREAT_LEVELS.includes(value.threat_level)
-    && value.module === INCIDENT_MODULE
+    && INCIDENT_MODULES.includes(value.module)
     && (value.location?.lat === null || (Number.isFinite(value.location?.lat) && value.location.lat >= -90 && value.location.lat <= 90))
     && (value.location?.lng === null || (Number.isFinite(value.location?.lng) && value.location.lng >= -180 && value.location.lng <= 180))
     && ((value.location?.lat === null && value.location?.lng === null) || (Number.isFinite(value.location?.lat) && Number.isFinite(value.location?.lng)))

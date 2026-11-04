@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { INCIDENT_MODULE, createIncident, isIncident, toPublicIncident } from '../shared/incident.mjs';
 import { authenticateGuardian, seedDemoInvite, verifyGuardianInvite } from './services/guardianRegistry.js';
 import { writeAudit } from './services/auditLog.js';
-import { synthesizeIncident } from './services/incidentSynthesizer.js';
+import { deterministicFallback, synthesizeIncident } from './services/incidentSynthesizer.js';
 import { createStreamerRateLimiter, validateSosPayload } from './services/sosValidation.js';
 import { TwitchIntegration } from './services/twitchIntegration.js';
 
@@ -210,7 +210,16 @@ async function createSosIncident(input) {
   creatingIncidents.add(payload.streamer_id);
   try {
   const activatedAt = Date.now();
-  const synthesis = await synthesizeIncident({ audio_transcript_snippet: payload.audio_transcript_snippet, module_type: payload.module_type, location: payload.location });
+  const synthesisInput = {
+    audio_transcript_snippet: payload.audio_transcript_snippet,
+    module_type: payload.module_type,
+    source: payload.source,
+    location: {
+      lat: Number.isFinite(payload.location.lat) ? Math.round(payload.location.lat * 100) / 100 : null,
+      lng: Number.isFinite(payload.location.lng) ? Math.round(payload.location.lng * 100) / 100 : null
+    }
+  };
+  const synthesis = deterministicFallback(synthesisInput);
   const twitchAccount = twitch.accounts.get(payload.streamer_id);
   const incident = createIncident({
     incident_id: `sos-${activatedAt}-${randomBytes(4).toString('hex')}`, threat_level: synthesis.threat_level,
@@ -220,19 +229,28 @@ async function createSosIncident(input) {
   });
   if (!isIncident(incident)) return { status: 500, body: { error: 'Incident failed schema validation.' } };
   const cancelToken = randomBytes(32).toString('base64url');
+  const graceDelayMs = Number(process.env.FULE_DISPATCH_GRACE_MS) || 10_000;
+  const escalationDelayMs = Number(process.env.FULE_ESCALATION_DELAY_MS) || 30_000;
   writeStateChange({ incident, event: 'SOS_CREATED', fromStatus: null, toStatus: incident.status, actorId: payload.streamer_id });
   incidents.set(incident.incident_id, { ...incident, streamer_id: payload.streamer_id });
-  cancelCredentials.set(incident.incident_id, { streamer_id: payload.streamer_id, token_hash: hashToken(cancelToken).toString('hex'), dispatch_ready_at: activatedAt + 10_000 });
+  cancelCredentials.set(incident.incident_id, { streamer_id: payload.streamer_id, token_hash: hashToken(cancelToken).toString('hex'), dispatch_ready_at: activatedAt + graceDelayMs });
   io.to('guardians').emit('sos_activated', { ...incident, grace_period_seconds: 10 });
   io.to('public').emit('incident:public', toPublicIncident(incident));
-  scheduleDispatch(incident, { graceDelayMs: 10_000, escalationDelayMs: 30_000 });
+  scheduleDispatch(incident, { graceDelayMs, escalationDelayMs });
+  void synthesizeIncident(synthesisInput).then((aiResult) => {
+    if (!incidents.has(incident.incident_id)) return;
+    const updated = changeIncident(incident.incident_id, aiResult, { event: 'AI_SYNTHESIS_UPDATED', actorId: 'system' });
+    io.to('guardians').emit('incident_updated', updated);
+    io.to(`streamer:${incident.incident_id}`).emit('incident_updated', updated);
+    publishPublicUpdate(updated);
+  }).catch((error) => console.error('Incident synthesis update failed:', error.message));
   void twitch.createClip(payload.streamer_id).then((clipUrl) => {
     if (!clipUrl) return;
     const current = incidents.get(incident.incident_id); if (!current) return;
     const updated = changeIncident(incident.incident_id, { clip_url: clipUrl }, { event: 'CLIP_ATTACHED', actorId: payload.streamer_id, details: 'Twitch clip captured after SOS activation' });
     io.to('guardians').emit('incident_clip_ready', updated);
   });
-  return { status: 201, body: { incident: { incident_id: incident.incident_id, status: incident.status, created_at: incident.created_at, source: incident.source }, streamer_cancel_token: cancelToken } };
+  return { status: 201, body: { incident, streamer_cancel_token: cancelToken } };
   } finally {
     creatingIncidents.delete(payload.streamer_id);
   }
@@ -408,11 +426,12 @@ app.get('/api/incidents', requestLimit({ limit: 60, windowMs: 60_000 }), (req, r
   return res.json({ incidents: [...incidents.values()].map(({ streamer_id, ...incident }) => incident), guardian_id: guardian.guardian_id });
 });
 
-app.post('/api/sos', requestLimit({ limit: 6, windowMs: 60_000 }), async (req, res) => {
+app.post('/api/sos', requestLimit({ limit: Number(process.env.FULE_SOS_IP_LIMIT) || 6, windowMs: 60_000 }), async (req, res) => {
   const user = getTwitchUser(req);
   const authenticatedStreamer = user && req.body?.streamer_id === user.id;
   if (!authenticatedStreamer && !(demoMode && isLoopbackRequest(req))) return res.status(401).json({ error: 'Sign in with the matching Twitch streamer account to trigger SOS.' });
-  if (req.body?.source && req.body.source !== 'button') return res.status(400).json({ error: 'Chat and redeem incidents must come from verified Twitch EventSub events.' });
+  const source = req.body?.source || 'button';
+  if (source !== 'button' && !(demoMode && isLoopbackRequest(req))) return res.status(400).json({ error: 'Chat and redeem incidents must come from verified Twitch EventSub events.' });
   try { const result = await createSosIncident(req.body); return res.status(result.status).json(result.body); }
   catch (error) { console.error('Could not create SOS incident:', error.message); return res.status(500).json({ error: 'Could not create incident. Please retry.' }); }
 });

@@ -29,3 +29,23 @@ test('OpenAI errors fall back deterministically with the same shape', async () =
   const result = await synthesizeIncident(input, { demoMode: false, client });
   assert.deepEqual(result, deterministicFallback(input));
 });
+
+test('button and redeem SOS without transcript default to CRITICAL', () => {
+  for (const source of ['button', 'redeem']) {
+    assert.equal(deterministicFallback({ ...input, audio_transcript_snippet: '', source }).threat_level, 'CRITICAL');
+  }
+});
+
+test('synthesis rounds location and respects the total deadline', async () => {
+  let sentInput;
+  const client = { responses: { create: async (_options, request) => {
+    sentInput = JSON.parse(_options.input);
+    assert.equal(request.maxRetries, 0);
+    return new Promise(() => {});
+  } } };
+  const started = Date.now();
+  const result = await synthesizeIncident({ ...input, location: { lat: 12.9716, lng: 77.5946 } }, { demoMode: false, client, deadlineMs: 40 });
+  assert.ok(Date.now() - started < 160);
+  assert.deepEqual(sentInput.location, { lat: 12.97, lng: 77.59 });
+  assert.deepEqual(result, deterministicFallback({ ...input, location: { lat: 12.9716, lng: 77.5946 } }));
+});
