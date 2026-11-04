@@ -38,7 +38,17 @@ services:
       FULE_LOAD_TEST_TOKEN: ${FULE_LOAD_TEST_TOKEN:-}
       FULE_SOS_IP_LIMIT: ${FULE_SOS_IP_LIMIT:-6}
       FULE_API_IP_LIMIT: ${FULE_API_IP_LIMIT:-180}
+      SAFE_WALK_PIN_PEPPER: ${SAFE_WALK_PIN_PEPPER:?Set SAFE_WALK_PIN_PEPPER in the root .env file}
+      WEB_PUSH_PUBLIC_KEY: ${WEB_PUSH_PUBLIC_KEY:-}
+      WEB_PUSH_PRIVATE_KEY: ${WEB_PUSH_PRIVATE_KEY:-}
+      WEB_PUSH_SUBJECT: ${WEB_PUSH_SUBJECT:-mailto:security@fule.app}
+      NEARBY_GUARDIAN_RADIUS_METERS: ${NEARBY_GUARDIAN_RADIUS_METERS:-400}
+      NEARBY_GUARDIAN_OFFER_LIMIT: ${NEARBY_GUARDIAN_OFFER_LIMIT:-10}
+      NEARBY_GUARDIAN_ACCEPT_CAP: ${NEARBY_GUARDIAN_ACCEPT_CAP:-5}
+      EVIDENCE_STORAGE_DIR: /app/backend/data/evidence
+      EVIDENCE_ENCRYPTION_KEY: ${EVIDENCE_ENCRYPTION_KEY:-}
     ports: ["4000:4000"]
+    volumes: [fule-evidence:/app/backend/data/evidence]
     depends_on:
       postgres: { condition: service_healthy }
       redis: { condition: service_healthy }
@@ -53,3 +63,4 @@ services:
 volumes:
   fule-postgres:
   fule-redis:
+  fule-evidence:

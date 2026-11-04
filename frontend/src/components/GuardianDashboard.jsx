@@ -30,6 +30,8 @@ export default function GuardianDashboard({ search = '', onIncidentsChange, onRo
   const [loadError, setLoadError] = useState('');
   const [ackPending, setAckPending] = useState({});
   const [demoStatuses, setDemoStatuses] = useState({});
+  const [nearbyOffers, setNearbyOffers] = useState([]);
+  const [dutyStatus, setDutyStatus] = useState('off');
   const [now, setNow] = useState(Date.now());
   const socketRef = useRef(null);
   const roleRef = useRef('public');
@@ -67,6 +69,8 @@ export default function GuardianDashboard({ search = '', onIncidentsChange, onRo
       setAckPending((current) => ({ ...current, [incident.incident_id]: false }));
     };
     socket.on('sos_activated', upsert);
+    socket.on('nearby_sos_offer', (offer) => setNearbyOffers((current) => [offer, ...current.filter((item) => item.incident_id !== offer.incident_id)]));
+    socket.on('guardian_accept_required', () => setLoadError('Accept the nearby response request before acknowledging or opening exact details.'));
     socket.on('incident:public', (incident) => { if (roleRef.current !== 'guardian') upsert(incident); });
     for (const event of ['incident_acknowledged', 'incident_dispatch_ready', 'incident_escalated', 'incident_updated', 'sos_cancelled', 'incident_clip_ready', 'dispatch_queued', 'dispatch_sent', 'dispatch_acknowledged', 'dispatch_status_updated']) socket.on(event, upsert);
     socket.on('incident:public:update', (update) => publishAlerts((current) => current.map((item) => item.incident_id === update.incident_id ? { ...item, ...update } : item)));
@@ -74,6 +78,16 @@ export default function GuardianDashboard({ search = '', onIncidentsChange, onRo
     const tick = window.setInterval(() => setNow(Date.now()), 1000);
     return () => { window.clearInterval(tick); socket.disconnect(); };
   }, [guardianToken, demoMode]);
+
+  useEffect(() => {
+    if (role !== 'guardian' || !guardianToken) { setDutyStatus('off'); return; }
+    let live = true;
+    fetch(`${API_URL}/api/guardians/duty`, { headers: { Authorization: `Bearer ${guardianToken}` } }).then(async (response) => {
+      if (!response.ok) throw new Error('Could not load on-duty status.');
+      return response.json();
+    }).then((data) => { if (live) setDutyStatus(data.on_duty ? 'on' : 'off'); }).catch(() => { if (live) setDutyStatus('off'); });
+    return () => { live = false; };
+  }, [role, guardianToken]);
 
   const visibleAlerts = useMemo(() => {
     const allAlerts = [...demoAlerts.map((item) => ({ ...item, status: demoStatuses[item.incident_id] || item.status })), ...alerts];
@@ -118,13 +132,52 @@ export default function GuardianDashboard({ search = '', onIncidentsChange, onRo
     } catch (requestError) { setLoadError(requestError.message); }
   }
 
+  async function acceptNearby(offer) {
+    if (roleRef.current !== 'guardian') return;
+    try {
+      const response = await fetch(`${API_URL}/api/incidents/${encodeURIComponent(offer.incident_id)}/nearby-accept`, { method: 'POST', headers: { Authorization: `Bearer ${guardianToken}`, 'Content-Type': 'application/json' }, body: '{}' });
+      const result = await response.json(); if (!response.ok) throw new Error(result.error || 'Could not accept nearby alert.');
+      upsert(result.incident);
+      setNearbyOffers((current) => current.filter((item) => item.incident_id !== offer.incident_id));
+      setLoadError('');
+    } catch (error) { setLoadError(error.message); }
+  }
+
+  async function toggleDuty() {
+    if (dutyStatus === 'on') {
+      const response = await fetch(`${API_URL}/api/guardians/duty`, { method: 'POST', headers: { Authorization: `Bearer ${guardianToken}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ on_duty: false }) });
+      if (response.ok) setDutyStatus('off');
+      return;
+    }
+    if (!navigator.geolocation) { setLoadError('Location sharing is unavailable in this browser.'); return; }
+    setDutyStatus('requesting');
+    navigator.geolocation.getCurrentPosition(async ({ coords }) => {
+      try {
+        const response = await fetch(`${API_URL}/api/guardians/duty`, { method: 'POST', headers: { Authorization: `Bearer ${guardianToken}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ on_duty: true, location: { lat: coords.latitude, lng: coords.longitude } }) });
+        const result = await response.json(); if (!response.ok) throw new Error(result.error || 'Could not enable on-duty status.');
+        setDutyStatus('on'); setLoadError('');
+      } catch (error) { setDutyStatus('off'); setLoadError(error.message); }
+    }, () => { setDutyStatus('off'); setLoadError('Location permission is required to go on duty.'); }, { enableHighAccuracy: true, timeout: 12_000, maximumAge: 30_000 });
+  }
+
+  async function downloadCaseFile(alert) {
+    try {
+      const response = await fetch(`${API_URL}/api/incidents/${encodeURIComponent(alert.incident_id)}/case-file`, { headers: { Authorization: `Bearer ${guardianToken}` } });
+      if (!response.ok) throw new Error('Could not download the verified case file.');
+      const blob = await response.blob(); const url = URL.createObjectURL(blob); const anchor = document.createElement('a');
+      anchor.href = url; anchor.download = `FULE-${alert.incident_id}-case-file.json`; anchor.click(); URL.revokeObjectURL(url);
+    } catch (error) { setLoadError(error.message); }
+  }
+
   const activeCount = visibleAlerts.filter((item) => ['PENDING_DISPATCH', 'DISPATCHING', 'ACKNOWLEDGED', 'ESCALATED'].includes(item.status)).length;
   return <aside className="guardian-panel" id="alerts" aria-label="Guardian alert panel">
     <div className="guardian-panel-header" id="logs"><div><p className="eyebrow"><Radio size={13}/> GUARDIAN NETWORK</p><h2>{role === 'guardian' ? 'Incident history' : 'Emergency alerts'}</h2></div><span className={`guardian-connection ${connection}`}><i/>{connection === 'online' ? 'LIVE' : connection === 'offline' ? 'OFFLINE' : 'CONNECTING'}</span></div>
     {role !== 'guardian' && <div className="guardian-access"><ShieldCheck size={15}/><span>Public feed · private details require verification</span></div>}
     {role !== 'guardian' && <div className="guardian-auth">{showTokenForm ? <form className="guardian-auth-form" onSubmit={connectGuardian}><label className="visually-hidden" htmlFor="guardian-invite">Guardian invite code</label><input id="guardian-invite" type="password" value={tokenDraft} onChange={(event) => setTokenDraft(event.target.value)} placeholder="Guardian invite code" autoComplete="current-password"/><button type="submit">VERIFY</button></form> : <button className="guardian-auth-button" onClick={() => setShowTokenForm(true)}>Verify as guardian</button>}</div>}
     {role === 'guardian' && <button className="guardian-logout" onClick={disconnectGuardian}>Disconnect guardian access</button>}
+    {role === 'guardian' && <div className="guardian-duty-control"><span><strong>Nearby response</strong><small>{dutyStatus === 'on' ? 'On duty · neighborhood shared' : 'Off duty · location not shared'}</small></span><button type="button" onClick={toggleDuty} disabled={dutyStatus === 'requesting'}>{dutyStatus === 'on' ? 'Go off duty' : dutyStatus === 'requesting' ? 'Locating…' : 'Go on duty'}</button><p>Observe, call for help, assist when safe. Never confront.</p></div>}
     <div className="alerts-overview"><span className="overview-mark"><Activity size={17}/></span><span><strong>{activeCount} active {activeCount === 1 ? 'alert' : 'alerts'}</strong><small>{role === 'guardian' ? 'Guardian only incident details' : 'Anonymized safety notices'}</small></span></div>
+    {role === 'guardian' && nearbyOffers.length > 0 && <section className="nearby-offers" aria-label="Nearby responder offers"><h3>Nearby response requests</h3>{nearbyOffers.map((offer) => <article key={offer.incident_id}><strong>{offer.threat_level} · {offer.approximate_area}</strong><p>{offer.guidance}</p><button type="button" onClick={() => acceptNearby(offer)}>Accept · reveal exact location</button></article>)}</section>}
     {loadError && <div className="panel-error" role="alert"><TriangleAlert size={14}/>{loadError}</div>}
     <div className="alert-list" id="logs" aria-live="polite">
       {loading && !demoMode ? <div className="panel-state"><LoaderCircle className="spinner" size={22}/><strong>Loading alert feed</strong><span>Connecting to live safety updates…</span></div>
@@ -147,11 +200,11 @@ export default function GuardianDashboard({ search = '', onIncidentsChange, onRo
               {activeStatus && <div className="escalation-countdown" role="timer" aria-label={countdown ? `Escalation in ${countdown} seconds` : 'Escalation is due'}><span><Clock3 size={13}/>ESCALATION</span><strong>{countdown ? `00:${String(countdown).padStart(2, '0')}` : 'DUE'}</strong></div>}
               <DispatchTimeline incident={alert}/>
               <OperatorBrief incident={alert} compact privateLocation={role === 'guardian'}/>
-              <div className="alert-meta"><span>{alert.source.toUpperCase()} · {alert.status.replaceAll('_', ' ')}</span>{alert.clip_url && <a href={alert.clip_url} target="_blank" rel="noreferrer" aria-label="Open clip evidence">CLIP EVIDENCE <ArrowUpRight size={12}/></a>}</div>
+              <div className="alert-meta"><span>{alert.source.toUpperCase()} · {alert.status.replaceAll('_', ' ')}</span>{alert.clip_url && <a href={alert.clip_url} target="_blank" rel="noreferrer" aria-label="Open clip evidence">CLIP EVIDENCE <ArrowUpRight size={12}/></a>}{role === 'guardian' && !alert.demo && <button type="button" onClick={() => downloadCaseFile(alert)}>CASE FILE</button>}</div>
               {alert.escalated && <p className="alert-escalation-note">{alert.escalation_flag}</p>}
               {role === 'guardian' && ['SENT', 'ACKNOWLEDGED'].includes(alert.dispatch_record?.status) && alert.dispatch_stage !== 'STAND_DOWN' && <button className="stand-down-button" onClick={() => standDown(alert)}>STAND DOWN DISPATCH</button>}
-              <button className={`acknowledge-button ${acknowledged ? 'acknowledged' : ''}`} onClick={() => acknowledge(alert)} disabled={acknowledged || (!alert.demo && role !== 'guardian') || Boolean(ackPending[alert.incident_id])} aria-label={acknowledged ? 'Incident acknowledged' : `Acknowledge and dispatch incident ${alert.incident_id}`}>
-                {acknowledged ? <><Check size={15}/>ACKNOWLEDGED</> : ackPending[alert.incident_id] ? <><LoaderCircle className="spinner" size={15}/>SENDING…</> : alert.demo ? <><ShieldCheck size={15}/>SIMULATE ACKNOWLEDGEMENT</> : role !== 'guardian' ? <><ShieldCheck size={15}/>GUARDIAN ACCESS REQUIRED</> : <><ShieldCheck size={15}/>ACKNOWLEDGE &amp; DISPATCH</>}
+              <button className={`acknowledge-button ${acknowledged ? 'acknowledged' : ''}`} onClick={() => acknowledge(alert)} disabled={acknowledged || (!alert.demo && role !== 'guardian') || Boolean(ackPending[alert.incident_id]) || nearbyOffers.some((offer) => offer.incident_id === alert.incident_id)} aria-label={acknowledged ? 'Incident acknowledged' : `Acknowledge and dispatch incident ${alert.incident_id}`}>
+                {acknowledged ? <><Check size={15}/>ACKNOWLEDGED</> : ackPending[alert.incident_id] ? <><LoaderCircle className="spinner" size={15}/>SENDING…</> : nearbyOffers.some((offer) => offer.incident_id === alert.incident_id) ? <><ShieldCheck size={15}/>ACCEPT NEARBY REQUEST FIRST</> : alert.demo ? <><ShieldCheck size={15}/>SIMULATE ACKNOWLEDGEMENT</> : role !== 'guardian' ? <><ShieldCheck size={15}/>GUARDIAN ACCESS REQUIRED</> : <><ShieldCheck size={15}/>ACKNOWLEDGE &amp; DISPATCH</>}
               </button>
             </motion.article>;
           })}</AnimatePresence>}

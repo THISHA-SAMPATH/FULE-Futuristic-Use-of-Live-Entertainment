@@ -11,6 +11,8 @@ FULE is a Twitch centered women's safety and civic guardian network. The primary
 - `shared/incident.mjs`: shared incident fields, normalization, and public redaction helpers imported by both frontend and backend.
 - Production data uses PostgreSQL (`DATABASE_URL`) and Redis (`REDIS_URL`); production startup fails closed without both. Apply migrations with `npm --prefix backend run migrate:latest`.
 - Precise coordinates are guardian-only. Public incident notices must use coarse coordinates and a generic summary.
+- Nearby on-duty responders receive only an approximate area until they accept; safe-walk trails and case files are private to the streamer session and verified guardians/admins.
+- Safe-walk jobs use BullMQ/Redis in production and a persistent file-backed demo queue offline. Evidence bytes are AES-256-GCM encrypted; production multi-instance use requires shared durable evidence storage.
 - Auth uses bcrypt password hashes, short-lived JWTs, rotating refresh tokens, and admin approval for guardians. Legacy invite authentication is demo-only.
 
 ## Run commands

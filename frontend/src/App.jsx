@@ -13,6 +13,8 @@ import { SafetyCategories, FeatureBanners } from './components/HomeSections.jsx'
 import { DispatchTimeline, OperatorBrief } from './components/DispatchTimeline.jsx';
 import TrustedContacts from './components/TrustedContacts.jsx';
 import DemoTriggers from './components/DemoTriggers.jsx';
+import SafeWalkPanel from './components/SafeWalkPanel.jsx';
+import EvidenceRecorder from './components/EvidenceRecorder.jsx';
 import useDemoFeed from './hooks/useDemoFeed.js';
 import useLoudAlarm from './hooks/useLoudAlarm.js';
 import { DEMO_NETWORK, DEMO_STREAMS } from './demo/seedData.js';
@@ -23,6 +25,7 @@ import './App.css';
 import './calmTheme.css';
 import './paletteTheme.css';
 import './dashboardLayout.css';
+import './safetyFeatures.css';
 
 const DEMO_MODE = import.meta.env.VITE_DEMO_MODE === 'true';
 
@@ -39,6 +42,8 @@ export default function App() {
   const [remaining, setRemaining] = useState(0);
   const [alarmEnabled, setAlarmEnabled] = useState(false);
   const [alertsOpen, setAlertsOpen] = useState(false);
+  const [nearbyAccepted, setNearbyAccepted] = useState(0);
+  const [evidenceToken, setEvidenceToken] = useState('');
   const streamerSocketRef = useRef(null);
   const demoAlerts = useDemoFeed(DEMO_MODE);
   const active = Boolean(
@@ -63,23 +68,34 @@ export default function App() {
 
   const startAlarm = useLoudAlarm(Boolean(active), alarmEnabled);
 
+  const registerStreamerIncident = useCallback((result) => {
+    const socket = io(API_URL, { transports: ['websocket', 'polling'] }); streamerSocketRef.current?.disconnect(); streamerSocketRef.current = socket;
+    socket.on('connect', () => socket.emit('register_streamer', { incident_id: result.incident.incident_id, streamer_id: result.streamer?.id || twitchUser?.id || 'demo-streamer', cancel_token: result.streamer_cancel_token }));
+    socket.on('streamer_action_confirmed', ({ status }) => setActiveIncident((current) => current ? { ...current, status } : current));
+    socket.on('streamer_action_rejected', ({ reason }) => setError(reason || 'The cancel window has ended.'));
+    for (const event of ['incident_dispatch_ready', 'incident_acknowledged', 'incident_escalated', 'incident_updated', 'dispatch_queued', 'dispatch_sent', 'dispatch_acknowledged', 'dispatch_status_updated']) socket.on(event, setActiveIncident);
+    socket.on('trusted_contacts_notified', () => setActiveIncident((current) => current ? { ...current, contacts_notified_at: new Date().toISOString(), dispatch_stage: 'CONTACTS' } : current));
+    socket.on('nearby_guardians_update', (update) => setNearbyAccepted(update.accepted_count || 0));
+    setNearbyAccepted(result.nearby_accepted_count || 0);
+    setEvidenceToken(result.streamer_cancel_token || '');
+    setActiveIncident(result.incident);
+    setAlertsOpen(true);
+  }, [twitchUser]);
+
+  const handleSafeWalkEmergency = useCallback((incident, cancelToken) => {
+    registerStreamerIncident({ incident, streamer: twitchUser || { id: 'demo-streamer' }, streamer_cancel_token: cancelToken });
+  }, [registerStreamerIncident, twitchUser]);
+
   const triggerSos = useCallback(async (source = 'button', transcript = '') => {
     if (sending || active) return;
     setError(''); setSending(true);
     startAlarm();
     try {
       const result = await submitSos({ demoMode: DEMO_MODE, user: twitchUser, apiUrl: API_URL, source, transcript });
-      const socket = io(API_URL, { transports: ['websocket', 'polling'] }); streamerSocketRef.current?.disconnect(); streamerSocketRef.current = socket;
-      socket.on('connect', () => socket.emit('register_streamer', { incident_id: result.incident.incident_id, streamer_id: result.streamer.id, cancel_token: result.streamer_cancel_token }));
-      socket.on('streamer_action_confirmed', ({ status }) => setActiveIncident((current) => current ? { ...current, status } : current));
-      socket.on('streamer_action_rejected', ({ reason }) => setError(reason || 'The cancel window has ended.'));
-      for (const event of ['incident_dispatch_ready', 'incident_acknowledged', 'incident_escalated', 'incident_updated', 'dispatch_queued', 'dispatch_sent', 'dispatch_acknowledged', 'dispatch_status_updated']) socket.on(event, setActiveIncident);
-      socket.on('trusted_contacts_notified', () => setActiveIncident((current) => current ? { ...current, contacts_notified_at: new Date().toISOString(), dispatch_stage: 'CONTACTS' } : current));
-      setActiveIncident(result.incident);
-      setAlertsOpen(true);
+      registerStreamerIncident(result);
     } catch (requestError) { setError(requestError.message || 'SOS could not be sent.'); }
     finally { setSending(false); }
-  }, [sending, active, twitchUser, startAlarm]);
+  }, [sending, active, twitchUser, startAlarm, registerStreamerIncident]);
 
   useEffect(() => {
     if (!alertsOpen) return undefined;
@@ -132,7 +148,8 @@ export default function App() {
       {error && <div className="global-error" role="alert"><AlertTriangle size={16}/><span>{error}</span>{error.includes('Connect your Twitch account') && <a href={`${API_URL}/auth/twitch`}>Connect Twitch</a>}<button onClick={() => setError('')} aria-label="Dismiss error">×</button></div>}
       <div className="main-dashboard-grid gamey-grid"><div className="feed-column gamey-feed">
         <Hero active={Boolean(active)} featuredStream={featuredStream} carouselStreams={carouselStreams} demoMode={DEMO_MODE} onOpenAlerts={() => setAlertsOpen(true)}/>
-        {activeIncident && <section className="active-response-card"><div className="active-response-heading"><span>LIVE RESPONSE STATUS</span><strong>{activeIncident.dispatch_record?.status || 'GUARDIANS ALERTED'}</strong></div><DispatchTimeline incident={activeIncident}/><OperatorBrief incident={activeIncident} privateLocation/>{activeIncident.repeat_offender && <p className="repeat-offender-flag">Repeat false-alarm pattern flagged for review.</p>}</section>}
+        <SafeWalkPanel demoMode={DEMO_MODE} streamer={twitchUser} activeIncident={activeIncident} onEmergency={handleSafeWalkEmergency}/>
+        {activeIncident && <section className="active-response-card"><div className="active-response-heading"><span>LIVE RESPONSE STATUS</span><strong>{activeIncident.dispatch_record?.status || 'GUARDIANS ALERTED'}</strong></div><p className="nearby-response-count" aria-live="polite">{nearbyAccepted} nearby {nearbyAccepted === 1 ? 'guardian is' : 'guardians are'} coming</p><DispatchTimeline incident={activeIncident}/><OperatorBrief incident={activeIncident} privateLocation/><EvidenceRecorder incident={activeIncident} streamerToken={evidenceToken}/>{activeIncident.repeat_offender && <p className="repeat-offender-flag">Repeat false-alarm pattern flagged for review.</p>}</section>}
         <SafetyCategories selected={category} onSelect={setCategory}/>
         <FeatureBanners/>
         {DEMO_MODE && <details className="demo-drawer"><summary>Demo controls <span>Simulated triggers · no real contacts</span></summary><DemoTriggers onTrigger={triggerSos} disabled={Boolean(active)} sending={sending}/></details>}

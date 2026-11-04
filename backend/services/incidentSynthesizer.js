@@ -26,7 +26,7 @@ export function capWords(value, maxWords = 15) {
 
 export function deterministicFallback({ audio_transcript_snippet = '', module_type = 'FULE_PROTECT', location = {}, source = 'button' }) {
   const transcript = String(audio_transcript_snippet).slice(-4000);
-  const urgent = /\b(help|danger|attack|weapon|emergency|threat|unsafe|hurt|following|stalking|sos)\b/i.test(transcript);
+  const urgent = /\b(help|danger|attack|weapon|emergency|threat|unsafe|hurt|following|stalking|sos|duress)\b/i.test(transcript);
   const elevated = /\b(scared|uncomfortable|concerned|lost|alone|suspicious|need someone)\b/i.test(transcript);
   const threat_level = urgent || (!transcript.trim() && ['button', 'redeem'].includes(source)) ? 'CRITICAL' : elevated ? 'ELEVATED' : 'LOW';
   const where = Number.isFinite(location.lat) && Number.isFinite(location.lng) ? 'Location telemetry attached.' : 'Location unavailable.';

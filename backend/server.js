@@ -18,9 +18,13 @@ import { createDispatchProvider, createEmergencyReport } from './services/dispat
 import { createEscalationLadder } from './services/escalationLadder.js';
 import { notifyTrustedContacts } from './services/trustedContactNotifier.js';
 import { authenticateAccess, loginAccount, refreshAccount, registerAccount, requestGuardianApproval, approveGuardian } from './services/accountService.js';
-import { redis, redisEnabled, installSocketAdapter, verifyRuntimeInfrastructure, scheduleEscalationJobs, cancelEscalationJobs, startBackgroundWorkers, closeRuntimeInfrastructure } from './services/runtimeInfrastructure.js';
+import { redis, redisEnabled, installSocketAdapter, verifyRuntimeInfrastructure, scheduleEscalationJobs, cancelEscalationJobs, scheduleSafeWalkCheckin, scheduleSafeWalkTimeout, cancelSafeWalkJobs, startBackgroundWorkers, closeRuntimeInfrastructure } from './services/runtimeInfrastructure.js';
 import { activeSockets, alertDeliveryLatency, httpRequests, log, metricsRegistry, queueDepth } from './services/securityMetrics.js';
 import { twitchAccountStore } from './services/twitchAccountStore.js';
+import { createSafeWalkWorkflow, matchNearbyGuardians, safeWalkTokenMatches } from './services/safetyFeatures.js';
+import { safetyFeatureStore } from './services/safetyFeatureStore.js';
+import { EvidenceVault } from './services/evidenceVault.js';
+import { getWebPushPublicKey, sendSafeWalkPush } from './services/webPushNotifier.js';
 
 dotenv.config({ path: fileURLToPath(new URL('./.env', import.meta.url)) });
 
@@ -53,6 +57,7 @@ if (process.env.SENTRY_DSN) Sentry.init({
 });
 if (process.env.NODE_ENV === 'production' && !process.env.DATABASE_URL) throw new Error('DATABASE_URL is required in production.');
 if (process.env.NODE_ENV === 'production' && !process.env.METRICS_TOKEN) throw new Error('METRICS_TOKEN is required in production.');
+if (process.env.NODE_ENV === 'production' && Buffer.from(process.env.EVIDENCE_ENCRYPTION_KEY || '', 'base64').length !== 32) throw new Error('EVIDENCE_ENCRYPTION_KEY must be base64 encoded 32 random bytes in production.');
 const dispatchProvider = createDispatchProvider({
   demoMode,
   url: process.env.DISPATCH_WEBHOOK_URL,
@@ -142,7 +147,7 @@ app.use(cors({
     return callback(null, isAllowedOrigin(origin) ? origin || false : false);
   },
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Streamer-Evidence-Token', 'X-Safe-Walk-Token'],
   credentials: true,
   maxAge: 600
 }));
@@ -162,11 +167,15 @@ app.use((req, res, next) => {
 });
 app.use(express.json({ limit: '32kb', strict: true, type: 'application/json' }));
 
+const evidenceVault = new EvidenceVault({ directory: process.env.EVIDENCE_STORAGE_DIR || './data/evidence', store: safetyFeatureStore });
+
 function enforceRequestSafety(req, res, next) {
   const origin = req.get('Origin');
   if (!isAllowedOrigin(origin)) return res.status(403).json({ error: 'Request origin is not allowed.' });
   if (req.get('Sec-Fetch-Site') === 'cross-site') return res.status(403).json({ error: 'Cross-site requests are not allowed.' });
-  if (!['GET', 'HEAD', 'OPTIONS'].includes(req.method) && req.get('Content-Type')?.split(';')[0].trim().toLowerCase() !== 'application/json') {
+  const type = req.get('Content-Type')?.split(';')[0].trim().toLowerCase();
+  const evidenceUpload = req.method === 'POST' && /^\/api\/incidents\/[\w.-]+\/evidence$/.test(req.path) && /^(audio|video)\/(webm|mp4|ogg|mpeg)$/.test(type || '');
+  if (!['GET', 'HEAD', 'OPTIONS'].includes(req.method) && type !== 'application/json' && !evidenceUpload) {
     return res.status(415).json({ error: 'Requests must use application/json.' });
   }
   next();
@@ -344,8 +353,14 @@ async function changeIncident(incidentId, patch, { event, actorId, details } = {
 
 async function emitIncidentUpdate(incident, eventName) {
   await flushIncidentWrites();
-  io.to('guardians').emit(eventName, incident);
-  io.to('dispatch').emit(eventName, incident);
+  const offers = await safetyFeatureStore.nearbyOfferStates(incident.incident_id).catch(() => []);
+  const pending = offers.filter((offer) => !offer.accepted_at);
+  const restrictedRooms = pending.map((offer) => `guardian:${offer.guardian_id}`);
+  const guardians = io.to('guardians');
+  const dispatch = io.to('dispatch');
+  if (restrictedRooms.length) { guardians.except(restrictedRooms).emit(eventName, incident); dispatch.except(restrictedRooms).emit(eventName, incident); }
+  else { guardians.emit(eventName, incident); dispatch.emit(eventName, incident); }
+  for (const offer of pending) io.to(`guardian:${offer.guardian_id}`).emit(eventName, toPublicIncident(incident));
   io.to(`streamer:${incident.incident_id}`).emit(eventName, incident);
   publishPublicUpdate(incident);
 }
@@ -410,7 +425,7 @@ async function sendToDispatch(incidentId, cause = 'ESCALATION') {
     }, { event: 'DISPATCH_SENT', actorId: 'system', details: `Dispatch sent via ${dispatchProvider.name}; ETA ${sentRecord.responder_eta_minutes ?? 'unknown'} minutes.` });
     await deleteCancelCredential(incidentId);
     emitIncidentUpdate(escalated, 'dispatch_sent');
-    io.to('guardians').emit('incident_escalated', escalated);
+    await emitIncidentUpdate(escalated, 'incident_escalated');
     io.to(`streamer:${incidentId}`).emit('incident_escalated', escalated);
   } catch (error) {
     const latest = await getIncident(incidentId);
@@ -422,7 +437,7 @@ async function sendToDispatch(incidentId, cause = 'ESCALATION') {
       dispatch_record: { ...queuedRecord, status: 'FAILED', sent_at: null, stage: 'FAILED' }, dispatch_stage: 'FAILED'
     }, { event: 'DISPATCH_FAILED', actorId: 'system', details: error.message });
     emitIncidentUpdate(failed, 'dispatch_status_updated');
-    io.to('guardians').emit('incident_escalated', failed);
+    await emitIncidentUpdate(failed, 'incident_escalated');
     io.to(`streamer:${incidentId}`).emit('incident_escalated', failed);
   }
 }
@@ -528,8 +543,15 @@ async function createSosIncident(input) {
   incidents.set(incident.incident_id, persistedIncident);
   await flushIncidentWrites();
   const broadcastStarted = process.hrtime.bigint();
-  io.to('guardians').emit('sos_activated', { ...incident, grace_period_seconds: 10 });
-  io.to('public').emit('incident:public', toPublicIncident(incident));
+  let nearbyOffered = 0;
+  let nearbyResponders = [];
+  try { nearbyResponders = await notifyNearbyGuardians(incident); nearbyOffered = nearbyResponders.length; }
+  catch (error) { log('error', 'nearby_guardian_matching_failed', { incident_id: incident.incident_id, error: error.message }); }
+  const proximityRooms = nearbyResponders.map((responder) => `guardian:${responder.guardian_id}`);
+  if (proximityRooms.length) io.to('guardians').except(proximityRooms).emit('sos_activated', { ...incident, grace_period_seconds: 10 });
+  else io.to('guardians').emit('sos_activated', { ...incident, grace_period_seconds: 10 });
+  for (const responder of nearbyResponders) io.to(`guardian:${responder.guardian_id}`).emit('sos_activated', { ...toPublicIncident(incident), grace_period_seconds: 10 });
+  if (!input.silent_public) io.to('public').emit('incident:public', toPublicIncident(incident));
   alertDeliveryLatency.observe(Number(process.hrtime.bigint() - broadcastStarted) / 1e9);
   await scheduleDispatch(incident, { contactsDelayMs, dispatchDelayMs });
   void synthesizeIncident(synthesisInput).then(async (aiResult) => {
@@ -542,12 +564,56 @@ async function createSosIncident(input) {
     const current = incidents.get(incident.incident_id); if (!current) return;
     const updated = await changeIncident(incident.incident_id, { clip_url: clipUrl }, { event: 'CLIP_ATTACHED', actorId: payload.streamer_id, details: 'Twitch clip captured after SOS activation' });
     await flushIncidentWrites();
-    io.to('guardians').emit('incident_clip_ready', updated);
+    await emitIncidentUpdate(updated, 'incident_clip_ready');
   });
-  return { status: 201, body: { incident, streamer_cancel_token: cancelToken } };
+  return { status: 201, body: { incident, streamer_cancel_token: cancelToken, nearby_offered_count: nearbyOffered, nearby_accepted_count: 0 } };
   } finally {
     creatingIncidents.delete(payload.streamer_id);
   }
+}
+
+const safeWalkWorkflow = createSafeWalkWorkflow({
+  store: safetyFeatureStore,
+  queue: {
+    scheduleCheckin: scheduleSafeWalkCheckin,
+    scheduleTimeout: scheduleSafeWalkTimeout,
+    cancelWalkJobs: cancelSafeWalkJobs
+  },
+  notify: async (walk, message) => {
+    io.to(`safe-walk:${walk.walk_id}`).emit(message.event, { walk_id: walk.walk_id, ...message });
+    if (message.event === 'safe_walk_checkin_due') void sendSafeWalkPush(walk.streamer_id, message);
+  },
+  triggerSos: async (payload) => {
+    const result = await createSosIncident({ ...payload, module_type: 'FULE_PROTECT', location: { lat: payload.location?.lat, lng: payload.location?.lng, address: payload.location?.address || 'Safe-walk last known location' } });
+    if (result.status === 201) return result.body;
+    if (result.status === 409) {
+      const existing = incidentRepository.db
+        ? await incidentRepository.db('incidents').select('payload', 'streamer_id').where({ streamer_id: payload.streamer_id }).whereIn('status', ['PENDING_DISPATCH', 'DISPATCHING', 'ESCALATED']).orderBy('created_at', 'desc').first()
+        : [...incidents.values()].find((item) => item.streamer_id === payload.streamer_id && ['PENDING_DISPATCH', 'DISPATCHING', 'ESCALATED'].includes(item.status));
+      if (existing) return { incident: existing.payload ? { ...existing.payload, streamer_id: existing.streamer_id } : existing };
+    }
+    return null;
+  }
+});
+
+async function notifyNearbyGuardians(incident) {
+  if (!Number.isFinite(incident.location?.lat) || !Number.isFinite(incident.location?.lng)) return [];
+  const radiusMeters = Math.max(50, Math.min(5_000, Number(process.env.NEARBY_GUARDIAN_RADIUS_METERS) || 400));
+  const limit = Math.max(1, Math.min(20, Number(process.env.NEARBY_GUARDIAN_OFFER_LIMIT) || 10));
+  const locations = await safetyFeatureStore.nearbyDutyLocations(incident.location, radiusMeters);
+  const responders = matchNearbyGuardians(incident.location, locations, { radiusMeters, limit });
+  await safetyFeatureStore.saveNearbyOffers(incident.incident_id, responders);
+  for (let index = 0; index < responders.length; index += 1) {
+    const responder = responders[index];
+    io.to(`guardian:${responder.guardian_id}`).emit('nearby_sos_offer', {
+      incident_id: incident.incident_id,
+      threat_level: incident.threat_level,
+      approximate_area: responder.approximate_area,
+      priority: index + 1,
+      guidance: 'Observe from a safe distance, call emergency services (112) if needed, and assist only when safe. Never confront.'
+    });
+  }
+  return responders;
 }
 
 async function markStreamerSafe(streamerId) {
@@ -768,6 +834,111 @@ app.post('/api/streamer/location', async (req, res) => {
   return res.json({ ok: true });
 });
 
+function locationInput(value) {
+  return value && Number.isFinite(value.lat) && value.lat >= -90 && value.lat <= 90 && Number.isFinite(value.lng) && value.lng >= -180 && value.lng <= 180;
+}
+
+async function runRetentionCleanup() {
+  const retentionDays = Number(process.env.INCIDENT_RETENTION_DAYS) || 90;
+  const cutoff = new Date(Date.now() - retentionDays * 86_400_000);
+  if (typeof incidentRepository.expiredEvidenceKeys === 'function') {
+    const keys = await incidentRepository.expiredEvidenceKeys(cutoff);
+    await evidenceVault.removeStorageKeys(keys);
+  }
+  await cleanupIncidentData(retentionDays);
+}
+
+async function authorizeSafeWalk(req, walkId) {
+  const record = await safetyFeatureStore.get(walkId);
+  const token = String(req.get('X-Safe-Walk-Token') || '');
+  return record && safeWalkTokenMatches(token, record.session_token_hash) ? record : null;
+}
+
+app.post('/api/safe-walks', requestLimit({ limit: 5, windowMs: 60_000 }), async (req, res) => {
+  const identity = await getStreamerIdentity(req, req.body?.streamer_id);
+  if (!identity) return res.status(401).json({ error: 'Connect Twitch before starting a safe walk.' });
+  const { destination, eta_minutes: etaMinutes, check_in_interval_minutes: interval, safe_pin: safePin, duress_pin: duressPin, location } = req.body || {};
+  if (typeof destination !== 'string' || destination.trim().length < 2 || destination.length > 160) return res.status(400).json({ error: 'Enter a destination between 2 and 160 characters.' });
+  if (!Number.isInteger(etaMinutes) || etaMinutes < 1 || etaMinutes > 720 || !Number.isInteger(interval) || interval < 1 || interval > 60) return res.status(400).json({ error: 'ETA must be 1–720 minutes and check-in interval 1–60 minutes.' });
+  if (![safePin, duressPin].every((pin) => typeof pin === 'string' && /^\d{4,8}$/.test(pin)) || safePin === duressPin) return res.status(400).json({ error: 'Set distinct 4–8 digit safe and duress PINs.' });
+  if (location && !locationInput(location)) return res.status(400).json({ error: 'Location coordinates are invalid.' });
+  if (!location && !demoMode) return res.status(400).json({ error: 'Current location is required to start a safe walk.' });
+  try {
+    const result = await safeWalkWorkflow.start({ streamer_id: identity.id, destination, eta_minutes: etaMinutes, check_in_interval_minutes: interval, safe_pin: safePin, duress_pin: duressPin, location: location ? { lat: location.lat, lng: location.lng } : null });
+    writeAudit({ event: 'SAFE_WALK_STARTED', actor_id: identity.id, details: result.walk.walk_id });
+    return res.status(201).json(result);
+  } catch (error) { return res.status(503).json({ error: `Could not start safe walk: ${error.message}` }); }
+});
+
+app.get('/api/safe-walks/push-key', (_req, res) => res.json({ public_key: getWebPushPublicKey() }));
+
+function validPushEndpoint(value) {
+  if (typeof value !== 'string' || value.length > 2048) return false;
+  try {
+    const endpoint = new URL(value);
+    const host = endpoint.hostname.toLowerCase();
+    const allowed = host === 'fcm.googleapis.com'
+      || host === 'updates.push.services.mozilla.com'
+      || host === 'web.push.apple.com'
+      || host.endsWith('.notify.windows.com');
+    return endpoint.protocol === 'https:' && endpoint.port === '' && !endpoint.username && !endpoint.password && allowed;
+  } catch { return false; }
+}
+
+app.post('/api/safe-walks/push-subscription', async (req, res) => {
+  const identity = await getStreamerIdentity(req, req.body?.streamer_id);
+  if (!identity) return res.status(401).json({ error: 'Connect Twitch before enabling safe-walk notifications.' });
+  const subscription = req.body?.subscription;
+  if (!subscription || !validPushEndpoint(subscription.endpoint)
+    || typeof subscription.keys?.p256dh !== 'string' || subscription.keys.p256dh.length > 256
+    || typeof subscription.keys?.auth !== 'string' || subscription.keys.auth.length > 128) return res.status(400).json({ error: 'A valid Web Push subscription is required.' });
+  await safetyFeatureStore.savePushSubscription(identity.id, { endpoint: subscription.endpoint, expirationTime: subscription.expirationTime || null, keys: { p256dh: subscription.keys.p256dh, auth: subscription.keys.auth } });
+  writeAudit({ event: 'SAFE_WALK_PUSH_SUBSCRIPTION_SAVED', actor_id: identity.id });
+  return res.status(201).json({ ok: true });
+});
+
+app.delete('/api/safe-walks/push-subscription', async (req, res) => {
+  const identity = await getStreamerIdentity(req, req.body?.streamer_id);
+  if (!identity) return res.status(401).json({ error: 'Connect Twitch before managing safe-walk notifications.' });
+  if (!validPushEndpoint(req.body?.endpoint)) return res.status(400).json({ error: 'A valid Web Push endpoint is required.' });
+  await safetyFeatureStore.removePushSubscription(identity.id, req.body.endpoint);
+  return res.json({ ok: true });
+});
+
+app.get('/api/safe-walks/:walkId', async (req, res) => {
+  const record = await authorizeSafeWalk(req, String(req.params.walkId));
+  if (!record) return res.status(403).json({ error: 'Safe-walk session is invalid.' });
+  return res.json({ walk: record.walk });
+});
+
+app.post('/api/safe-walks/:walkId/location', async (req, res) => {
+  const record = await authorizeSafeWalk(req, String(req.params.walkId));
+  if (!record) return res.status(403).json({ error: 'Safe-walk session is invalid.' });
+  if (!locationInput(req.body?.location)) return res.status(400).json({ error: 'Location coordinates are invalid.' });
+  const walk = await safeWalkWorkflow.addLocation(record.walk.walk_id, req.body.location);
+  return walk ? res.json({ ok: true }) : res.status(409).json({ error: 'Safe walk is no longer active.' });
+});
+
+app.post('/api/safe-walks/:walkId/check-in', async (req, res) => {
+  const record = await authorizeSafeWalk(req, String(req.params.walkId));
+  if (!record) return res.status(403).json({ error: 'Safe-walk session is invalid.' });
+  if (req.body?.location && !locationInput(req.body.location)) return res.status(400).json({ error: 'Location coordinates are invalid.' });
+  const result = await safeWalkWorkflow.checkin(record.walk.walk_id, req.get('X-Safe-Walk-Token'), String(req.body?.pin || ''), req.body?.location);
+  if (!result.ok) return res.status(400).json({ error: 'PIN is invalid or check-in is no longer active.' });
+  if (result.duress) writeAudit({ event: 'SAFE_WALK_DURESS_ESCALATION', actor_id: record.walk.streamer_id, incident_id: result.incident?.incident_id || null });
+  else writeAudit({ event: 'SAFE_WALK_CHECKED_IN', actor_id: record.walk.streamer_id, details: record.walk.walk_id });
+  return res.json({ ok: true, status: result.status, walk: result.walk });
+});
+
+app.post('/api/safe-walks/:walkId/cancel', async (req, res) => {
+  const record = await authorizeSafeWalk(req, String(req.params.walkId));
+  if (!record) return res.status(403).json({ error: 'Safe-walk session is invalid.' });
+  const cancelled = await safeWalkWorkflow.cancel(record.walk.walk_id, req.get('X-Safe-Walk-Token'));
+  if (!cancelled) return res.status(409).json({ error: 'Safe walk is already closed.' });
+  writeAudit({ event: 'SAFE_WALK_CANCELLED', actor_id: record.walk.streamer_id, details: record.walk.walk_id });
+  return res.json({ ok: true, status: 'CANCELLED' });
+});
+
 app.post('/api/guardians/verify', requestLimit({ limit: 8, windowMs: 60_000 }), (req, res) => {
   if (!demoMode) return res.status(410).json({ error: 'Invite verification is disabled. Register, request guardian status, and wait for administrator approval.' });
   const key = req.ip || req.socket.remoteAddress || 'unknown';
@@ -777,6 +948,45 @@ app.post('/api/guardians/verify', requestLimit({ limit: 8, windowMs: 60_000 }), 
   return res.json(verified);
 });
 
+app.post('/api/guardians/duty', async (req, res) => {
+  const guardian = getGuardian(req);
+  if (!guardian) return res.status(403).json({ error: 'Verified guardian access required.' });
+  const onDuty = req.body?.on_duty === true;
+  if (!onDuty) {
+    await safetyFeatureStore.removeDutyLocation(guardian.guardian_id);
+    writeAudit({ event: 'GUARDIAN_OFF_DUTY', actor_id: guardian.guardian_id });
+    return res.json({ on_duty: false });
+  }
+  if (!locationInput(req.body?.location)) return res.status(400).json({ error: 'Location coordinates are invalid.' });
+  const area = typeof req.body?.area_label === 'string' ? req.body.area_label.trim().slice(0, 120) : '';
+  const areaLabel = area || `Neighborhood near ${req.body.location.lat.toFixed(2)}, ${req.body.location.lng.toFixed(2)}`;
+  await safetyFeatureStore.saveDutyLocation(guardian.guardian_id, { lat: req.body.location.lat, lng: req.body.location.lng, area_label: areaLabel });
+  writeAudit({ event: 'GUARDIAN_ON_DUTY', actor_id: guardian.guardian_id, details: 'Guardian enabled coarse-area proximity matching.' });
+  return res.json({ on_duty: true, area_label: areaLabel });
+});
+
+app.get('/api/guardians/duty', async (req, res) => {
+  const guardian = getGuardian(req);
+  if (!guardian) return res.status(403).json({ error: 'Verified guardian access required.' });
+  const location = await safetyFeatureStore.getDutyLocation(guardian.guardian_id);
+  return res.json({ on_duty: Boolean(location), area_label: location?.area_label || null, updated_at: location?.updated_at || null });
+});
+
+app.post('/api/incidents/:incidentId/nearby-accept', async (req, res) => {
+  const guardian = getGuardian(req);
+  if (!guardian) return res.status(403).json({ error: 'Verified guardian access required.' });
+  const incident = await getIncident(String(req.params.incidentId));
+  if (!incident || !['PENDING_DISPATCH', 'DISPATCHING', 'ESCALATED'].includes(incident.status)) return res.status(404).json({ error: 'Active incident not found.' });
+  const maxAccepted = Math.max(1, Math.min(20, Number(process.env.NEARBY_GUARDIAN_ACCEPT_CAP) || 5));
+  const accepted = await safetyFeatureStore.acceptNearbyGuardian(incident.incident_id, guardian.guardian_id, maxAccepted);
+  if (!accepted.accepted) return res.status(409).json({ error: 'This responder is not eligible or the incident has reached its responder limit.', accepted_count: accepted.count });
+  writeAudit({ event: 'NEARBY_GUARDIAN_ACCEPTED', incident_id: incident.incident_id, actor_id: guardian.guardian_id });
+  const update = { incident_id: incident.incident_id, accepted_count: accepted.count, cap: maxAccepted };
+  io.to(`streamer:${incident.incident_id}`).emit('nearby_guardians_update', update);
+  io.to('guardians').emit('nearby_guardians_update', update);
+  return res.json({ accepted: true, accepted_count: accepted.count, incident });
+});
+
 app.get('/api/incidents', requestLimit({ limit: 60, windowMs: 60_000 }), async (req, res) => {
   const guardian = getGuardian(req);
   if (!guardian) return res.status(403).json({ error: 'Verified guardian access required.' });
@@ -784,7 +994,48 @@ app.get('/api/incidents', requestLimit({ limit: 60, windowMs: 60_000 }), async (
   const offset = req.query?.offset === undefined ? 0 : Number(req.query.offset);
   if (!Number.isInteger(limit) || limit < 1 || limit > 100 || !Number.isInteger(offset) || offset < 0 || offset > 1_000_000) return res.status(400).json({ error: 'limit must be 1–100 and offset a non-negative integer.' });
   const page = await listIncidentPage({ limit, offset });
-  return res.json({ incidents: page.map(({ streamer_id, ...incident }) => incident), guardian_id: guardian.guardian_id, limit, offset });
+  const visible = await Promise.all(page.map(async ({ streamer_id, ...incident }) => await safetyFeatureStore.guardianHasPendingOffer(incident.incident_id, guardian.guardian_id) ? toPublicIncident(incident) : incident));
+  return res.json({ incidents: visible, guardian_id: guardian.guardian_id, limit, offset });
+});
+
+app.get('/api/incidents/:incidentId/case-file', async (req, res) => {
+  const guardian = getGuardian(req);
+  if (!guardian && !mayAccessDispatch(req)) return res.status(403).json({ error: 'Verified guardian or dispatch authority required.' });
+  const incident = await getIncident(String(req.params.incidentId));
+  if (!incident) return res.status(404).json({ error: 'Incident not found.' });
+  if (guardian && await safetyFeatureStore.guardianHasPendingOffer(incident.incident_id, guardian.guardian_id)) return res.status(403).json({ error: 'Accept the nearby response request before accessing exact details.' });
+  const walks = await safetyFeatureStore.walksForIncident(incident.incident_id);
+  const bundle = await evidenceVault.createCaseFile(incident, { walks });
+  res.setHeader('Content-Disposition', `attachment; filename="FULE-${incident.incident_id}-case-file.json"`);
+  return res.json(bundle);
+});
+
+app.post('/api/incidents/:incidentId/evidence', express.raw({ type: ['audio/*', 'video/*'], limit: '5mb' }), async (req, res) => {
+  const incidentId = String(req.params.incidentId);
+  const incident = await getIncident(incidentId);
+  const credentials = await loadCancelCredential(incidentId);
+  if (!incident || !credentials || !tokenMatches(req.get('X-Streamer-Evidence-Token'), credentials.token_hash) || credentials.streamer_id !== incident.streamer_id) return res.status(403).json({ error: 'Evidence upload requires the active streamer session.' });
+  if (!['PENDING_DISPATCH', 'DISPATCHING', 'ACKNOWLEDGED', 'ESCALATED'].includes(incident.status)) return res.status(409).json({ error: 'Evidence upload is closed for this incident.' });
+  const contentType = req.get('Content-Type')?.split(';')[0].toLowerCase();
+  try {
+    const entry = await evidenceVault.appendChunk(incidentId, req.body, { contentType });
+    writeAudit({ event: 'EVIDENCE_CHUNK_STORED', incident_id: incidentId, actor_id: credentials.streamer_id, details: `sequence=${entry.sequence} sha256=${entry.sha256}` });
+    io.to('guardians').emit('incident_evidence_added', { incident_id: incidentId, sequence: entry.sequence, recorded_at: entry.recorded_at, sha256: entry.sha256 });
+    return res.status(201).json({ evidence: { chunk_id: entry.chunk_id, sequence: entry.sequence, recorded_at: entry.recorded_at, sha256: entry.sha256, chain_hash: entry.chain_hash } });
+  } catch (error) { return res.status(400).json({ error: error.message }); }
+});
+
+app.get('/api/incidents/:incidentId/evidence/:chunkId', async (req, res) => {
+  if (!getGuardian(req) && !mayAccessDispatch(req)) return res.status(403).json({ error: 'Verified guardian or dispatch authority required.' });
+  const incidentId = String(req.params.incidentId);
+  const entries = await safetyFeatureStore.listEvidence(incidentId);
+  const entry = entries.find((item) => item.chunk_id === req.params.chunkId);
+  if (!entry) return res.status(404).json({ error: 'Evidence chunk not found.' });
+  const bytes = await evidenceVault.readChunk(entry);
+  if (createHash('sha256').update(bytes).digest('hex') !== entry.sha256) return res.status(409).json({ error: 'Evidence integrity verification failed.' });
+  res.type(entry.metadata?.content_type || 'application/octet-stream');
+  res.setHeader('Content-Disposition', `attachment; filename="${entry.chunk_id}.webm"`);
+  return res.send(bytes);
 });
 
 app.get('/api/streamer/trusted-contacts', requestLimit({ limit: 30, windowMs: 60_000 }), async (req, res) => {
@@ -815,13 +1066,16 @@ function mayAccessDispatch(req) { return Boolean(getGuardian(req) || (demoMode &
 
 app.get('/api/dispatch/queue', requestLimit({ limit: 60, windowMs: 60_000 }), async (req, res) => {
   if (!mayAccessDispatch(req)) return res.status(403).json({ error: 'Verified guardian or local demo access required.' });
-  const queue = (await listDispatchQueue({ limit: 100 })).map(({ streamer_id, ...incident }) => incident);
+  const guardian = getGuardian(req);
+  const queue = await Promise.all((await listDispatchQueue({ limit: 100 })).map(async ({ streamer_id, ...incident }) => guardian && await safetyFeatureStore.guardianHasPendingOffer(incident.incident_id, guardian.guardian_id) ? toPublicIncident(incident) : incident));
   return res.json({ simulated: demoMode, incidents: queue });
 });
 
 app.post('/api/dispatch/:incidentId/action', requestLimit({ limit: 60, windowMs: 60_000 }), async (req, res) => {
   if (!mayAccessDispatch(req)) return res.status(403).json({ error: 'Verified guardian or local demo access required.' });
   const incidentId = String(req.params.incidentId || '');
+  const guardian = getGuardian(req);
+  if (guardian && await safetyFeatureStore.guardianHasPendingOffer(incidentId, guardian.guardian_id)) return res.status(403).json({ error: 'Accept the nearby response request before accessing exact details.' });
   const action = String(req.body?.action || '').toUpperCase();
   const actor = getGuardian(req)?.guardian_id || 'demo-dispatch-console';
   if (action === 'STAND_DOWN') {
@@ -877,6 +1131,7 @@ io.on('connection', (socket) => {
   });
   if (socket.data.role === 'guardian') {
     socket.join('guardians');
+    socket.join(`guardian:${socket.data.guardianId}`);
     const expirationTimer = setTimeout(() => socket.disconnect(true), Math.max(0, socket.data.guardianExpiresAt - Date.now()));
     expirationTimer.unref?.();
     socket.on('disconnect', () => clearTimeout(expirationTimer));
@@ -899,11 +1154,27 @@ io.on('connection', (socket) => {
     socket.emit('streamer_registered', { incident_id: incident.incident_id });
   });
 
+  socket.on('register_safe_walk', async ({ walk_id, session_token } = {}) => {
+    if (socket.data.safeWalkId || typeof walk_id !== 'string' || typeof session_token !== 'string') return;
+    const record = await safetyFeatureStore.get(walk_id);
+    if (!record || !safeWalkTokenMatches(session_token, record.session_token_hash) || !['ACTIVE', 'AWAITING_CHECKIN'].includes(record.walk.status)) {
+      socket.emit('safe_walk_registration_failed', { walk_id });
+      return;
+    }
+    socket.data.safeWalkId = walk_id;
+    socket.join(`safe-walk:${walk_id}`);
+    socket.emit('safe_walk_registered', { walk_id });
+  });
+
   socket.on('acknowledge_incident', async (incidentId) => {
     if (socket.data.role !== 'guardian' || !socket.data.guardianId) return;
     if (typeof incidentId !== 'string' || incidentId.length > 128) return;
     const current = await getIncident(String(incidentId));
     if (!current || !['PENDING_DISPATCH', 'DISPATCHING', 'ESCALATED'].includes(current.status)) return;
+    if (await safetyFeatureStore.guardianHasPendingOffer(current.incident_id, socket.data.guardianId)) {
+      socket.emit('guardian_accept_required', { incident_id: current.incident_id });
+      return;
+    }
     clearIncidentTimers(current.incident_id);
     try {
       const acknowledged = await changeIncident(current.incident_id, {
@@ -960,7 +1231,15 @@ if (typeof Sentry.setupExpressErrorHandler === 'function') Sentry.setupExpressEr
 await startBackgroundWorkers({
   onContact: contactTrustedPeople,
   onDispatch: (incidentId) => sendToDispatch(incidentId, 'T_PLUS_60'),
-  onCleanup: () => cleanupIncidentData(Number(process.env.INCIDENT_RETENTION_DAYS) || 90)
+  onCleanup: runRetentionCleanup,
+  onSafeWalkCheckin: async (walkId, checkinNumber) => {
+    const due = await safeWalkWorkflow.checkinDue(walkId, checkinNumber);
+    if (due) writeAudit({ event: 'SAFE_WALK_CHECKIN_DUE', details: `${walkId}:${checkinNumber}` });
+  },
+  onSafeWalkTimeout: async (walkId, checkinNumber) => {
+    const incident = await safeWalkWorkflow.timeout(walkId, checkinNumber);
+    if (incident) writeAudit({ event: 'SAFE_WALK_AUTO_SOS', incident_id: incident.incident?.incident_id || null, details: `${walkId}:${checkinNumber}` });
+  }
 });
 await verifyRuntimeInfrastructure();
 await twitch.hydrate();

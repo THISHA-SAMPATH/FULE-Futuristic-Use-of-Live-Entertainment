@@ -12,6 +12,15 @@ flowchart LR
   Redis --> Adapter[Socket.IO Redis adapter]
   Redis --> Queue[BullMQ escalation + retention queues]
   Queue --> Workers[Queue workers on API instances]
+  Queue --> WalkJobs[Safe-walk check-in + 60s timeout jobs]
+  Workers --> Walks[(PostgreSQL safe walks + location trail)]
+  Workers --> Push[Web Push · VAPID · generic prompt]
+  Push --> SW[Streamer service worker]
+  Guardians[Verified on-duty guardians] --> Duty[(Coarse duty locations · 15m freshness)]
+  API1 -->|approximate offer| Guardians
+  Guardians -->|accept · then exact details| API1
+  API1 --> Vault[Evidence vault storage adapter]
+  Vault --> Chain[(PostgreSQL SHA-256 append-only hash chain)]
   Workers --> PG
   API1 --> OpenAI[OpenAI structured synthesis]
   API2 --> OpenAI
@@ -23,6 +32,10 @@ flowchart LR
   API1 --> Metrics[Prometheus /metrics]
   API2 --> Metrics
 ```
+
+## Safety workflow additions
+
+Safe-walk timers are BullMQ delayed jobs in Redis; durable walk state is in PostgreSQL and handlers re-check state/check-in sequence before acting. Local demo without Redis uses an atomic file-backed queue solely as an offline fallback. Missed-check-in notifications use VAPID Web Push when configured and contain no location; active-page demo falls back to the Socket.IO notice and browser notification. Nearby matching filters verified on-duty guardian locations no older than 15 minutes, bounding-box queries PostgreSQL and then calculates exact Haversine distances in the service; candidate location and exact incident coordinates are never in offer payloads. The exact SOS payload is sent to a nearby guardian only after an authenticated acceptance. Evidence metadata is hash chained under a locked PostgreSQL head row to serialize concurrent chunk appends. Chunk bytes currently use a filesystem adapter; production multi-instance deployments need a shared encrypted object-store adapter and durable volume configuration.
 
 ## Data and trust boundaries
 

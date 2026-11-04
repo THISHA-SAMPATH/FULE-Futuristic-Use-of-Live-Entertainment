@@ -4,6 +4,17 @@ FULE is a Twitch-centered women's safety and civic guardian network. The **FULE 
 
 > **Responsible use:** FULE supplements, but does not replace, emergency services (112). Demo mode uses a simulated dispatch provider and never calls an emergency number. Production dispatch requires an official integration with the local emergency authority and operational approval.
 
+## Safe Walk, nearby responders, and evidence
+
+- **Safe Walk Check-in:** A Twitch signed-in streamer can set a destination, ETA, check-in interval, and distinct safe/duress PINs. Redis/BullMQ schedules check-ins and a 60-second response window; local demo mode persists its simulation jobs in `backend/data/demo-jobs.json`. If the check-in expires, FULE raises an SOS with the last location trail. The duress PIN returns the same visible successful check-in state while silently creating an SOS. The browser asks permission before using location, microphone, or camera. Safe and duress PINs are HMAC-hashed server side; `SAFE_WALK_PIN_PEPPER` must be private and stable across instances.
+- Missed check-ins use Web Push when `WEB_PUSH_PUBLIC_KEY` and `WEB_PUSH_PRIVATE_KEY` are configured, including while the site is closed. The service worker sends a generic “Are you OK?” notification and contains no location. Without VAPID keys, the open-page demo still shows the 60-second check-in prompt.
+- **Nearby guardian matching:** verified guardians can opt in to on-duty location sharing. FULE only sends a coarse area to nearby responders within `NEARBY_GUARDIAN_RADIUS_METERS` (default 400 m), nearest first; exact incident details are released after acceptance, with a default cap of five accepted responders. Location records expire from matching after 15 minutes. Responders are instructed: observe, call for help, assist only when safe; never confront.
+- **Evidence Vault:** after SOS, the browser requests microphone permission and uploads 10-second audio chunks; a user can separately start audio + video. The API encrypts each stored chunk with AES-256-GCM and stores its plaintext SHA-256 hash in a hash-chained record. Verified guardians can download a JSON case file from an alert card, including incident summary, response timeline, clips, safe-walk location trail, evidence hashes, chain verification, and chunk download paths. Evidence is retained with the incident retention period.
+
+Evidence chunk bytes use the local filesystem adapter at `EVIDENCE_STORAGE_DIR`; use a durable shared encrypted object-storage adapter before running multiple production instances. Set `EVIDENCE_ENCRYPTION_KEY` to base64-encoded 32 random bytes and retain the same key across instances; production refuses to start without it. The included local adapter is intended for development and single-host demo deployments. Browser recording is opt-in via a permission prompt and is unavailable when permission is denied.
+
+For Web Push, generate VAPID keys with `npx web-push generate-vapid-keys` from `backend/`, set both returned values in the backend environment as `WEB_PUSH_PUBLIC_KEY` and `WEB_PUSH_PRIVATE_KEY`, and set `WEB_PUSH_SUBJECT` to an operator contact such as a `mailto:` address. The private key stays server side; browser subscriptions are stored per streamer.
+
 ## Architecture
 
 ```mermaid

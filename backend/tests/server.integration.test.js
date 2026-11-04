@@ -17,6 +17,7 @@ let child;
 let dataDir;
 const sockets = new Set();
 const guardianInvite = 'integration-guardian-invite-2026';
+let cachedGuardian;
 
 async function freePort() {
   const server = createServer();
@@ -66,12 +67,14 @@ async function connected(client) {
 }
 
 async function verifyGuardian() {
+  if (cachedGuardian) return cachedGuardian;
   const response = await fetch(`${origin}/api/guardians/verify`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ invite_code: guardianInvite })
   });
   assert.equal(response.status, 200);
-  return response.json();
+  cachedGuardian = await response.json();
+  return cachedGuardian;
 }
 
 async function createSos(streamerId, module_type = 'FULE_PROTECT', source = 'button', transcript = 'I am safe but would like someone to check in.') {
@@ -105,10 +108,11 @@ before(async () => {
       TWITCH_REDIRECT_URI: `${origin}/auth/twitch/callback`,
       FULE_DEMO_GUARDIAN_INVITE: guardianInvite,
       FULE_DATA_DIR: dataDir,
+      EVIDENCE_STORAGE_DIR: join(dataDir, 'evidence'),
       FULE_CONTACTS_DELAY_MS: '350',
       FULE_DISPATCH_DELAY_MS: '1000',
       FULE_ESCALATION_DELAY_MS: '1200',
-      FULE_SOS_IP_LIMIT: '30',
+      FULE_SOS_IP_LIMIT: '100',
       OPENAI_API_KEY: ''
     },
     stdio: 'ignore'
@@ -150,6 +154,110 @@ test('SOS idempotency key returns the original incident on retry', async () => {
   assert.equal(retry.status, 200);
   assert.equal(retryBody.incident.incident_id, firstBody.incident.incident_id);
   assert.equal(retryBody.streamer_cancel_token, firstBody.streamer_cancel_token);
+});
+
+test('nearby on-duty guardian sees approximate area until acceptance reveals exact incident location', async () => {
+  const guardian = await verifyGuardian();
+  const guardianSocket = socket({ guardianToken: guardian.access_token });
+  await connected(guardianSocket);
+  const duty = await fetch(`${origin}/api/guardians/duty`, {
+    method: 'POST', headers: { Authorization: `Bearer ${guardian.access_token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ on_duty: true, location: { lat: 12.9716, lng: 77.5946 } })
+  });
+  assert.equal(duty.status, 200);
+  const dutyResult = await duty.json();
+  assert.equal(Object.hasOwn(dutyResult, 'lat'), false);
+  const offerEvent = once(guardianSocket, 'nearby_sos_offer');
+  const response = await createSos('nearby-private-streamer');
+  assert.equal(response.status, 201);
+  const { incident } = await response.json();
+  const offer = await offerEvent;
+  assert.equal(offer.incident_id, incident.incident_id);
+  assert.equal(offer.approximate_area.includes('12.9716'), false);
+  assert.equal(Object.hasOwn(offer, 'lat'), false);
+  const beforeAcceptance = await fetch(`${origin}/api/incidents?limit=100`, { headers: { Authorization: `Bearer ${guardian.access_token}` } });
+  const pendingIncident = (await beforeAcceptance.json()).incidents.find((item) => item.incident_id === incident.incident_id);
+  assert.equal(pendingIncident.location.lat, 12.97);
+  assert.equal(pendingIncident.summary.includes('Precise location'), true);
+  const acceptedResponse = await fetch(`${origin}/api/incidents/${incident.incident_id}/nearby-accept`, {
+    method: 'POST', headers: { Authorization: `Bearer ${guardian.access_token}`, 'Content-Type': 'application/json' }, body: '{}'
+  });
+  assert.equal(acceptedResponse.status, 200);
+  const accepted = await acceptedResponse.json();
+  assert.equal(accepted.incident.location.lat, 12.9716);
+  assert.equal(accepted.incident.location.lng, 77.5946);
+  const offDuty = await fetch(`${origin}/api/guardians/duty`, { method: 'POST', headers: { Authorization: `Bearer ${guardian.access_token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ on_duty: false }) });
+  assert.equal(offDuty.status, 200);
+  guardianSocket.disconnect();
+});
+
+test('safe-walk HTTP flow protects state with the session token and accepts a check-in then cancel', async () => {
+  const start = await fetch(`${origin}/api/safe-walks`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ streamer_id: 'safe-walk-api-test', destination: 'Central station', eta_minutes: 25, check_in_interval_minutes: 5, safe_pin: '1234', duress_pin: '5678', location: { lat: 12.9716, lng: 77.5946 } })
+  });
+  assert.equal(start.status, 201, await start.clone().text());
+  const created = await start.json();
+  const forbidden = await fetch(`${origin}/api/safe-walks/${created.walk.walk_id}`);
+  assert.equal(forbidden.status, 403);
+  const checkin = await fetch(`${origin}/api/safe-walks/${created.walk.walk_id}/check-in`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Safe-Walk-Token': created.session_token }, body: JSON.stringify({ pin: '1234' })
+  });
+  assert.equal(checkin.status, 200);
+  assert.equal((await checkin.json()).status, 'CHECKED_IN');
+  const cancel = await fetch(`${origin}/api/safe-walks/${created.walk.walk_id}/cancel`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Safe-Walk-Token': created.session_token }, body: '{}'
+  });
+  assert.equal(cancel.status, 200);
+  assert.equal((await cancel.json()).status, 'CANCELLED');
+});
+
+test('safe-walk push subscription is validated and stored per signed-in streamer', async () => {
+  const subscription = { endpoint: 'https://fcm.googleapis.com/subscription/opaque', keys: { p256dh: 'base64url-public-key', auth: 'base64url-auth-secret' } };
+  const response = await fetch(`${origin}/api/safe-walks/push-subscription`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ streamer_id: 'push-streamer', subscription })
+  });
+  assert.equal(response.status, 201, await response.clone().text());
+  assert.deepEqual(await response.json(), { ok: true });
+  const invalid = await fetch(`${origin}/api/safe-walks/push-subscription`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ streamer_id: 'push-streamer', subscription: { ...subscription, endpoint: 'http://not-secure.invalid/push' } })
+  });
+  assert.equal(invalid.status, 400);
+  const removed = await fetch(`${origin}/api/safe-walks/push-subscription`, {
+    method: 'DELETE', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ streamer_id: 'push-streamer', endpoint: subscription.endpoint })
+  });
+  assert.equal(removed.status, 200);
+});
+
+test('duress check-in appears normal to the streamer and silently escalates only to guardians', async () => {
+  const guardian = await verifyGuardian();
+  const guardianSocket = socket({ guardianToken: guardian.access_token });
+  const publicSocket = socket();
+  await Promise.all([connected(guardianSocket), connected(publicSocket)]);
+  const start = await fetch(`${origin}/api/safe-walks`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ streamer_id: 'duress-api-test', destination: 'Home', eta_minutes: 15, check_in_interval_minutes: 5, safe_pin: '1234', duress_pin: '9876', location: { lat: 12.9716, lng: 77.5946 } })
+  });
+  assert.equal(start.status, 201);
+  const walk = await start.json();
+  const guardianAlert = once(guardianSocket, 'sos_activated');
+  let publicIncident = false;
+  publicSocket.once('incident:public', () => { publicIncident = true; });
+  const checkin = await fetch(`${origin}/api/safe-walks/${walk.walk.walk_id}/check-in`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Safe-Walk-Token': walk.session_token }, body: JSON.stringify({ pin: '9876' })
+  });
+  assert.equal(checkin.status, 200);
+  const visibleResponse = await checkin.json();
+  assert.equal(visibleResponse.status, 'CHECKED_IN');
+  assert.equal(Object.hasOwn(visibleResponse, 'incident'), false);
+  const privateIncident = await guardianAlert;
+  assert.equal(privateIncident.streamer_contact.display_name, 'Demo Streamer');
+  await new Promise((resolve) => setTimeout(resolve, 150));
+  assert.equal(publicIncident, false);
+  guardianSocket.disconnect(); publicSocket.disconnect();
 });
 
 test('demo API accepts Vite fallback localhost origins with CORS credentials', async () => {
@@ -219,6 +327,28 @@ test('guardian receives exact incident while public room receives redacted event
   const history = await fetch(`${origin}/api/incidents`, { headers: { Authorization: `Bearer ${guardian.access_token}` } });
   assert.equal(history.status, 200);
   assert.ok((await history.json()).incidents.some((item) => item.incident_id === privateIncident.incident_id));
+});
+
+test('evidence chunk upload is encrypted at rest and appears in a verified case file', async () => {
+  const guardian = await verifyGuardian();
+  const response = await createSos('evidence-streamer');
+  assert.equal(response.status, 201);
+  const created = await response.json();
+  const bytes = Buffer.from('synthetic short audio evidence');
+  const upload = await fetch(`${origin}/api/incidents/${created.incident.incident_id}/evidence`, {
+    method: 'POST', headers: { 'Content-Type': 'audio/webm', 'X-Streamer-Evidence-Token': created.streamer_cancel_token }, body: bytes
+  });
+  assert.equal(upload.status, 201, await upload.clone().text());
+  const { evidence } = await upload.json();
+  const caseResponse = await fetch(`${origin}/api/incidents/${created.incident.incident_id}/case-file`, { headers: { Authorization: `Bearer ${guardian.access_token}` } });
+  assert.equal(caseResponse.status, 200);
+  const caseFile = await caseResponse.json();
+  assert.equal(caseFile.integrity.valid, true);
+  assert.equal(caseFile.integrity.files_valid, true);
+  assert.equal(caseFile.evidence[0].sha256, evidence.sha256);
+  const download = await fetch(`${origin}/api/incidents/${created.incident.incident_id}/evidence/${evidence.chunk_id}`, { headers: { Authorization: `Bearer ${guardian.access_token}` } });
+  assert.equal(download.status, 200);
+  assert.deepEqual(Buffer.from(await download.arrayBuffer()), bytes);
 });
 
 test('verified guardian acknowledgement sets registry identity and broadcasts state', async () => {

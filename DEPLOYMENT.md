@@ -6,6 +6,8 @@
 - Managed PostgreSQL (`DATABASE_URL`) and Redis (`REDIS_URL`) with private networking, TLS where supported, backups, and monitoring.
 - One exact HTTPS frontend origin in `FRONTEND_ORIGIN`.
 - Secret manager values for `JWT_ACCESS_SECRET`, Twitch credentials, OpenAI, dispatch/Twilio integrations, `METRICS_TOKEN`, and optional `SENTRY_DSN`.
+- `SAFE_WALK_PIN_PEPPER` and `EVIDENCE_ENCRYPTION_KEY` (base64-encoded 32 random bytes) must be stable secrets; production requires the evidence key.
+- For background safe-walk notifications, configure `WEB_PUSH_PUBLIC_KEY`, `WEB_PUSH_PRIVATE_KEY`, and `WEB_PUSH_SUBJECT` from generated VAPID credentials; keep the private key in the secret manager.
 
 Do not enable `DEMO_MODE` on a public deployment. Do not set `FULE_DEMO_GUARDIAN_INVITE` or `FULE_LOAD_TEST_TOKEN` outside local demos/tests. Create the first admin with the one-time operational command `npm --prefix backend run create:admin`, then remove the bootstrap credential from the runtime environment. Admin access is needed to approve guardian accounts.
 
@@ -16,6 +18,8 @@ The repository includes `backend/Dockerfile`, `frontend/Dockerfile`, and `docker
 Set `FRONTEND_ORIGIN=https://<frontend-domain>` exactly, and add the exact Twitch OAuth redirect URL `https://<api-domain>/auth/twitch/callback` in the Twitch Developer Console. Vercel frontend build values are `VITE_API_URL=https://<api-domain>` and `VITE_DEMO_MODE=false`; `VITE_` values are public.
 
 Set `DATABASE_URL` and `REDIS_URL` to managed services. Production intentionally fails at startup if either is absent. Configure PostgreSQL connection pool size for the service's connection budget (`PG_POOL_MAX`), and retain PostgreSQL connections below the database limit across all app instances. Redis must be shared by API instances to coordinate rate limits, socket fan-out, BullMQ work, and broadcaster EventSub ownership. If Twitch integration is enabled, generate and set `TWITCH_TOKEN_ENCRYPTION_KEY` as 32 random bytes encoded in Base64.
+
+Safe-walk scheduling uses BullMQ/Redis in production. Nearby matching uses the configured radius and acceptance cap; duty locations expire from matching after 15 minutes. Evidence chunks are AES-256-GCM encrypted at rest. The current storage adapter writes files under `EVIDENCE_STORAGE_DIR`; mount that directory on durable shared storage or replace the adapter with encrypted object storage before running multiple API instances. Safe-walk records and evidence metadata follow `INCIDENT_RETENTION_DAYS` and are removed by the hourly cleanup job.
 
 ## Health, scaling, and retention
 
