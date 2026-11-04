@@ -1,6 +1,12 @@
 export const DEMO_STREAMER = Object.freeze({ id: 'demo-streamer', login: 'Demo Streamer' });
 export const DEMO_LOCATION = Object.freeze({ lat: 0.001, lng: 0.001 });
 
+// React supplies a click event to onClick callbacks. This adapter deliberately
+// drops it so only serializable incident arguments can reach the SOS pipeline.
+export function createSosClickHandler(onTrigger, source = 'button', transcript = '') {
+  return () => onTrigger(source, transcript);
+}
+
 function readBrowserLocation(geolocation) {
   if (!geolocation?.getCurrentPosition) {
     return Promise.reject(new Error('Location access is unavailable in this browser.'));

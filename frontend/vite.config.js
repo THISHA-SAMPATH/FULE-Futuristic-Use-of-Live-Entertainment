@@ -6,6 +6,7 @@ export default defineConfig({
   server: {
     host: '0.0.0.0',
     port: Number(process.env.VITE_PORT) || 5173,
-    strictPort: true,
+    // When another FULE tab/server owns the default port, Vite selects the next free port.
+    strictPort: false,
   },
 });

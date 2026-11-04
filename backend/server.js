@@ -33,12 +33,26 @@ if (!demoMode && parsedAllowedOrigin.protocol !== 'https:' && !['localhost', '12
 }
 if (demoMode) seedDemoInvite(process.env.FULE_DEMO_GUARDIAN_INVITE);
 
+function isAllowedOrigin(origin) {
+  if (!origin || origin === allowedOrigin) return true;
+  if (!demoMode || !['localhost', '127.0.0.1'].includes(parsedAllowedOrigin.hostname)) return false;
+  try {
+    const candidate = new URL(origin);
+    const portNumber = Number(candidate.port || (candidate.protocol === 'https:' ? 443 : 80));
+    return candidate.protocol === parsedAllowedOrigin.protocol
+      && candidate.hostname === parsedAllowedOrigin.hostname
+      && portNumber >= 5173 && portNumber <= 5199;
+  } catch {
+    return false;
+  }
+}
+
 const io = new Server(httpServer, {
-  cors: { origin: allowedOrigin, methods: ['GET', 'POST'], credentials: true },
+  cors: { origin: (origin, callback) => callback(null, isAllowedOrigin(origin)), methods: ['GET', 'POST'], credentials: true },
   maxHttpBufferSize: 64 * 1024,
   allowRequest: (request, callback) => {
     const origin = request.headers.origin;
-    callback(null, !origin || origin === allowedOrigin);
+    callback(null, isAllowedOrigin(origin));
   }
 });
 const rateLimitSos = createStreamerRateLimiter({ limit: 3, windowMs: 5 * 60 * 1000 });
@@ -59,7 +73,7 @@ app.disable('x-powered-by');
 app.set('trust proxy', false);
 app.use(cors({
   origin(origin, callback) {
-    return callback(null, !origin || origin === allowedOrigin);
+    return callback(null, isAllowedOrigin(origin) ? origin || false : false);
   },
   methods: ['GET', 'POST', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
@@ -84,7 +98,7 @@ app.use(express.json({ limit: '32kb', strict: true, type: 'application/json' }))
 
 function enforceRequestSafety(req, res, next) {
   const origin = req.get('Origin');
-  if (origin && origin !== allowedOrigin) return res.status(403).json({ error: 'Request origin is not allowed.' });
+  if (!isAllowedOrigin(origin)) return res.status(403).json({ error: 'Request origin is not allowed.' });
   if (req.get('Sec-Fetch-Site') === 'cross-site') return res.status(403).json({ error: 'Cross-site requests are not allowed.' });
   if (!['GET', 'HEAD', 'OPTIONS'].includes(req.method) && req.get('Content-Type')?.split(';')[0].trim().toLowerCase() !== 'application/json') {
     return res.status(415).json({ error: 'Requests must use application/json.' });

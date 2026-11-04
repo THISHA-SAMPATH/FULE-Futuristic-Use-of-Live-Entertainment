@@ -33,7 +33,7 @@ Copy-Item frontend/.env.example frontend/.env
 npm run dev
 ```
 
-Open `http://localhost:5173`. The frontend uses port 5173 and the API/Socket.IO server uses port 4000. Keep `DEMO_MODE=true` in `backend/.env` and `VITE_DEMO_MODE=true` in `frontend/.env` for local demonstration. The demo invite comes from `FULE_DEMO_GUARDIAN_INVITE` in `backend/.env`; the sample value is local demo-only. Change it for your local run. Set both demo flags to `false` for real Twitch login and geolocation requirements. Never enable demo mode or use the sample invite on a public deployment.
+Open the Vite URL shown in the terminal (normally `http://localhost:5173`). If that port is busy, Vite automatically selects the next free port; demo-mode CORS accepts localhost Vite ports 5173–5199. The API uses port 4000. Keep `DEMO_MODE=true` in `backend/.env` and `VITE_DEMO_MODE=true` in `frontend/.env` for local demonstration. The demo invite comes from `FULE_DEMO_GUARDIAN_INVITE` in `backend/.env`; the sample value is local demo-only. Change it for your local run. Set both demo flags to `false` for real Twitch login and geolocation requirements. Never enable demo mode or use the sample invite on a public deployment.
 
 ## 60-second demo walkthrough
 

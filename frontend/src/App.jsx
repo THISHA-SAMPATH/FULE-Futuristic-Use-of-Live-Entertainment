@@ -17,6 +17,7 @@ import { API_URL } from './config.js';
 import { submitSos } from './sosFlow.js';
 import { selectFeaturedStream } from './streamAccess.js';
 import './App.css';
+import './calmTheme.css';
 
 const DEMO_MODE = import.meta.env.VITE_DEMO_MODE === 'true';
 
@@ -34,7 +35,10 @@ export default function App() {
   const [alarmEnabled, setAlarmEnabled] = useState(false);
   const streamerSocketRef = useRef(null);
   const demoAlerts = useDemoFeed(DEMO_MODE);
-  const active = activeIncident && ['PENDING_DISPATCH', 'DISPATCHING', 'ESCALATED'].includes(activeIncident.status);
+  const active = Boolean(
+    (activeIncident && ['PENDING_DISPATCH', 'DISPATCHING', 'ESCALATED'].includes(activeIncident.status))
+    || incidents.some((item) => ['PENDING_DISPATCH', 'DISPATCHING', 'ESCALATED'].includes(item.status))
+  );
 
   useEffect(() => {
     let live = true;
@@ -88,7 +92,13 @@ export default function App() {
     }, 350);
   }
 
-  return <div className="fule-shell" id="home">
+  return <div className="fule-shell" id="home" data-theme={active ? 'alert' : 'calm'}>
+    <svg className="ambient-backdrop" viewBox="0 0 1440 900" preserveAspectRatio="xMidYMid slice" aria-hidden="true" focusable="false">
+      <defs><linearGradient id="fule-wave-lavender" x1="0" y1="0" x2="1" y2="1"><stop stopColor="#a78bfa" stopOpacity=".14"/><stop offset="1" stopColor="#64748b" stopOpacity=".02"/></linearGradient><linearGradient id="fule-wave-alert" x1="0" y1="0" x2="1" y2="1"><stop stopColor="#fb7185" stopOpacity=".18"/><stop offset="1" stopColor="#f59e0b" stopOpacity=".04"/></linearGradient><filter id="fule-soften"><feGaussianBlur stdDeviation="36"/></filter></defs>
+      <path className="ambient-wave calm-wave" fill="url(#fule-wave-lavender)" filter="url(#fule-soften)" d="M0 155C170 55 279 90 433 176s269 124 446 34 311-159 561-72v339c-210-88-335-69-492 13S654 610 460 494 166 393 0 509z"/>
+      <path className="ambient-wave alert-wave" fill="url(#fule-wave-alert)" filter="url(#fule-soften)" d="M0 191c188-89 288-66 442 12s283 143 444 54 322-157 554-52v345c-201-74-355-56-510 31s-301 126-478 26S171 472 0 568z"/>
+      <circle className="ambient-orb" cx="1180" cy="170" r="145" fill="url(#fule-wave-lavender)" filter="url(#fule-soften)"/>
+    </svg>
     <Header search={search} onSearch={setSearch} onTrigger={triggerSos} sending={sending} active={Boolean(active)} user={twitchUser} unreadCount={activeCount} demoMode={DEMO_MODE}/>
     <Sidebar connection={socketStatus} role={role} demoMode={DEMO_MODE}/>
     <main className="dashboard-content">
@@ -97,14 +107,15 @@ export default function App() {
       <div className="main-dashboard-grid">
         <div className="feed-column">
           <Hero onTrigger={triggerSos} sending={sending} active={Boolean(active)} featuredStream={featuredStream} demoMode={DEMO_MODE} onJoinGuardian={joinAsGuardian}/>
-          {DEMO_MODE && <DemoTriggers onTrigger={triggerSos} disabled={Boolean(active)} sending={sending}/>}
+          {DEMO_MODE && <details className="demo-drawer"><summary>Demo controls <span>Simulated triggers · no real contacts</span></summary><DemoTriggers onTrigger={triggerSos} disabled={Boolean(active)} sending={sending}/></details>}
           <CategoryChips selected={category} onSelect={setCategory}/>
           <LiveStreamsSection demoMode={DEMO_MODE} incidents={filteredIncidents} search={search} category={category}/>
+          <NetworkPulse stats={networkStats} demoMode={DEMO_MODE}/>
           <TopGuardiansSection demoMode={DEMO_MODE} search={search}/>
           <MapCard incidents={incidents} demoMode={DEMO_MODE}/>
           <section className="alarm-option-card" id="settings"><span className="alarm-option-icon"><BellRing size={17}/></span><span><strong>Loud emergency alarm</strong><small>Play an audible signal during your active SOS.</small></span><input type="checkbox" checked={alarmEnabled} onChange={(event) => setAlarmEnabled(event.target.checked)} aria-label="Toggle loud emergency alarm"/></section>
         </div>
-        <aside className="right-column"><AlertPanel search={search} onIncidentsChange={setIncidents} onRoleChange={setRole} onStatus={setSocketStatus} demoMode={DEMO_MODE} demoAlerts={demoAlerts}/><NetworkPulse stats={networkStats} demoMode={DEMO_MODE}/></aside>
+        <aside className="right-column"><AlertPanel search={search} onIncidentsChange={setIncidents} onRoleChange={setRole} onStatus={setSocketStatus} demoMode={DEMO_MODE} demoAlerts={demoAlerts}/></aside>
       </div>
       <footer className="page-footer"><span>FULE · FUTURISTIC USE OF LIVE ENTERTAINMENT</span><span>COMMUNITY SAFETY, WITH CONSENT AND PRIVACY</span></footer>
     </main>

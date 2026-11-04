@@ -1,4 +1,5 @@
 import { AlertTriangle, Siren } from 'lucide-react';
+import { createSosClickHandler } from '../sosFlow.js';
 
 export function CancelToast({ incident, seconds, onCancel, error }) {
   if (!incident || incident.status !== 'PENDING_DISPATCH' || seconds <= 0) return null;
@@ -6,5 +7,5 @@ export function CancelToast({ incident, seconds, onCancel, error }) {
 }
 
 export function MobileSOSButton({ onTrigger, sending, active }) {
-  return <button className="mobile-sos" onClick={onTrigger} disabled={sending || active} aria-label={sending ? 'Sending SOS' : 'Trigger emergency SOS'}><Siren size={20}/>{sending ? 'SENDING SOS…' : active ? 'SOS ACTIVE' : 'TRIGGER SOS'}</button>;
+  return <button className="mobile-sos" onClick={createSosClickHandler(onTrigger)} disabled={sending || active} aria-label={sending ? 'Sending SOS' : 'Trigger emergency SOS'}><Siren size={20}/>{sending ? 'SENDING SOS…' : active ? 'SOS ACTIVE' : 'TRIGGER SOS'}</button>;
 }

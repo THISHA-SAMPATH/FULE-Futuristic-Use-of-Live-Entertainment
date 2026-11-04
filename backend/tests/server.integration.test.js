@@ -131,6 +131,24 @@ test('SOS create route accepts every supported module', async () => {
   }
 });
 
+test('demo API accepts Vite fallback localhost origins with CORS credentials', async () => {
+  const fallbackOrigin = 'http://127.0.0.1:5174';
+  const response = await fetch(`${origin}/api/sos`, {
+    method: 'POST',
+    headers: { Origin: fallbackOrigin, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      streamer_id: 'vite-fallback-origin',
+      location: { lat: 12.9716, lng: 77.5946 },
+      module_type: 'FULE_PROTECT',
+      source: 'button',
+      audio_transcript_snippet: 'Synthetic fallback-origin test'
+    })
+  });
+  assert.equal(response.status, 201);
+  assert.equal(response.headers.get('access-control-allow-origin'), fallbackOrigin);
+  assert.equal(response.headers.get('access-control-allow-credentials'), 'true');
+});
+
 test('Twitch OAuth route redirects with scopes and browser-bound one-time state', async () => {
   const start = await fetch(`${origin}/auth/twitch`, { redirect: 'manual' });
   assert.equal(start.status, 302);

@@ -1,6 +1,16 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { DEMO_LOCATION, DEMO_STREAMER, submitSos } from '../src/sosFlow.js';
+import { createSosClickHandler, DEMO_LOCATION, DEMO_STREAMER, submitSos } from '../src/sosFlow.js';
+
+test('SOS button click handlers discard circular DOM events before the pipeline', () => {
+  let args;
+  const clickHandler = createSosClickHandler((...values) => { args = values; });
+  const event = { target: { nodeName: 'BUTTON' }, currentTarget: { nodeName: 'BUTTON' } };
+  event.self = event;
+  clickHandler(event);
+  assert.deepEqual(args, ['button', '']);
+  assert.doesNotThrow(() => JSON.stringify({ source: args[0], transcript: args[1] }));
+});
 
 test('demo SOS uses synthetic identity and coordinates without Twitch or geolocation', async () => {
   const calls = [];
