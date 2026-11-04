@@ -115,7 +115,10 @@ before(async () => {
 
 after(async () => {
   for (const client of sockets) client.disconnect();
-  child?.kill();
+  if (child && child.exitCode === null) {
+    child.kill();
+    await new Promise((resolveExit) => child.once('exit', resolveExit));
+  }
   if (dataDir) await rm(dataDir, { recursive: true, force: true });
 });
 

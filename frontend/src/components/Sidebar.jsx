@@ -4,7 +4,7 @@ const LINKS = [
   { name: 'Home', href: '#home', icon: House },
   { name: 'Guardians', href: '#guardians', icon: ShieldCheck },
   { name: 'SOS Feeds', href: '#streams', icon: Radio },
-  { name: 'Logs', href: '#alerts', icon: Compass },
+  { name: 'Logs', href: '#logs', icon: Compass },
   { name: 'Community', href: '#community', icon: UsersRound },
   { name: 'Settings', href: '#settings', icon: Settings2 },
 ];

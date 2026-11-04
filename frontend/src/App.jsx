@@ -100,7 +100,7 @@ export default function App() {
           {DEMO_MODE && <DemoTriggers onTrigger={triggerSos} disabled={Boolean(active)} sending={sending}/>}
           <CategoryChips selected={category} onSelect={setCategory}/>
           <LiveStreamsSection demoMode={DEMO_MODE} incidents={filteredIncidents} search={search} category={category}/>
-          <TopGuardiansSection demoMode={DEMO_MODE}/>
+          <TopGuardiansSection demoMode={DEMO_MODE} search={search}/>
           <MapCard incidents={incidents} demoMode={DEMO_MODE}/>
           <section className="alarm-option-card" id="settings"><span className="alarm-option-icon"><BellRing size={17}/></span><span><strong>Loud emergency alarm</strong><small>Play an audible signal during your active SOS.</small></span><input type="checkbox" checked={alarmEnabled} onChange={(event) => setAlarmEnabled(event.target.checked)} aria-label="Toggle loud emergency alarm"/></section>
         </div>

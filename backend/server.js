@@ -11,6 +11,7 @@ import { writeAudit } from './services/auditLog.js';
 import { deterministicFallback, synthesizeIncident } from './services/incidentSynthesizer.js';
 import { createStreamerRateLimiter, validateSosPayload } from './services/sosValidation.js';
 import { TwitchIntegration } from './services/twitchIntegration.js';
+import { loadIncidents, persistIncident, removeIncident } from './services/incidentStore.js';
 
 dotenv.config({ path: fileURLToPath(new URL('./.env', import.meta.url)) });
 
@@ -41,13 +42,14 @@ const io = new Server(httpServer, {
   }
 });
 const rateLimitSos = createStreamerRateLimiter({ limit: 3, windowMs: 5 * 60 * 1000 });
-const incidents = new Map();
+const incidents = new Map(loadIncidents().map((incident) => [incident.incident_id, incident]));
 const cancelCredentials = new Map();
 const timers = new Map();
 const inviteAttempts = new Map();
 const streamerLocations = new Map();
 const sessionCookie = 'fule_twitch_session';
 const oauthStateCookie = 'fule_twitch_oauth_state';
+const sessionCookieSameSite = parsedAllowedOrigin.protocol === 'https:' ? 'none' : 'lax';
 const requestBuckets = new Map();
 const creatingIncidents = new Set();
 const socketConnectionsByIp = new Map();
@@ -197,6 +199,7 @@ function changeIncident(incidentId, patch, { event, actorId, details } = {}) {
     details
   });
   incidents.set(incidentId, updated);
+  persistIncident(updated);
   return updated;
 }
 
@@ -212,7 +215,7 @@ async function createSosIncident(input) {
   if (creatingIncidents.has(payload.streamer_id)) return { status: 409, body: { error: 'An SOS is already being processed for this streamer.' } };
   if (incidents.size >= 2_000) {
     const terminal = [...incidents.entries()].find(([, item]) => ['ACKNOWLEDGED', 'CANCELLED', 'FALSE_ALARM', 'RESOLVED'].includes(item.status));
-    if (terminal) incidents.delete(terminal[0]);
+    if (terminal) { incidents.delete(terminal[0]); removeIncident(terminal[0]); }
     else return { status: 503, body: { error: 'Incident capacity is temporarily full.' } };
   }
   creatingIncidents.add(payload.streamer_id);
@@ -241,6 +244,7 @@ async function createSosIncident(input) {
   const escalationDelayMs = Number(process.env.FULE_ESCALATION_DELAY_MS) || 30_000;
   writeStateChange({ incident, event: 'SOS_CREATED', fromStatus: null, toStatus: incident.status, actorId: payload.streamer_id });
   incidents.set(incident.incident_id, { ...incident, streamer_id: payload.streamer_id });
+  persistIncident(incidents.get(incident.incident_id));
   cancelCredentials.set(incident.incident_id, { streamer_id: payload.streamer_id, token_hash: hashToken(cancelToken).toString('hex'), dispatch_ready_at: activatedAt + graceDelayMs });
   io.to('guardians').emit('sos_activated', { ...incident, grace_period_seconds: 10 });
   io.to('public').emit('incident:public', toPublicIncident(incident));
@@ -356,6 +360,18 @@ function consumeInviteAttempt(key) {
   return true;
 }
 
+// Resume dispatch/escalation clocks for durable incidents after a process restart.
+for (const incident of incidents.values()) {
+  if (!['PENDING_DISPATCH', 'DISPATCHING'].includes(incident.status)) continue;
+  const ageMs = Math.max(0, Date.now() - Date.parse(incident.created_at));
+  const graceMs = Number(process.env.FULE_DISPATCH_GRACE_MS) || 10_000;
+  const escalationMs = Number(process.env.FULE_ESCALATION_DELAY_MS) || 30_000;
+  scheduleDispatch(incident, {
+    graceDelayMs: incident.status === 'PENDING_DISPATCH' ? Math.max(0, graceMs - ageMs) : 0,
+    escalationDelayMs: Math.max(0, escalationMs - ageMs)
+  });
+}
+
 io.use((socket, next) => {
   const address = socket.handshake.address || 'unknown';
   const now = Date.now();
@@ -400,7 +416,7 @@ app.get('/auth/twitch/callback', async (req, res) => {
   if (req.query.error || typeof req.query.code !== 'string') return res.status(400).send('Twitch authorization was not completed.');
   try {
     const result = await twitch.finishLogin(req.query.code);
-    res.cookie(sessionCookie, result.session, { httpOnly: true, sameSite: 'lax', secure: parsedAllowedOrigin.protocol === 'https:', maxAge: 7 * 24 * 60 * 60 * 1000, path: '/' });
+    res.cookie(sessionCookie, result.session, { httpOnly: true, sameSite: sessionCookieSameSite, secure: parsedAllowedOrigin.protocol === 'https:', maxAge: 7 * 24 * 60 * 60 * 1000, path: '/' });
     res.redirect(allowedOrigin);
   } catch (error) { console.error('Twitch login failed:', error.message); res.status(502).send('Twitch login failed.'); }
 });
@@ -420,7 +436,7 @@ app.post('/auth/twitch/logout', (req, res) => {
       if (user) streamerLocations.delete(user.id);
     } catch { /* Ignore malformed cookie values. */ }
   }
-  res.clearCookie(sessionCookie, { httpOnly: true, sameSite: 'lax', secure: parsedAllowedOrigin.protocol === 'https:', path: '/' }); res.json({ ok: true });
+  res.clearCookie(sessionCookie, { httpOnly: true, sameSite: sessionCookieSameSite, secure: parsedAllowedOrigin.protocol === 'https:', path: '/' }); res.json({ ok: true });
 });
 app.post('/api/streamer/location', (req, res) => {
   const streamer = getTwitchUser(req); if (!streamer) return res.status(401).json({ error: 'Twitch streamer login required.' });

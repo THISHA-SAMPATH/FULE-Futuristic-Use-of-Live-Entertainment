@@ -105,8 +105,8 @@ export default function GuardianDashboard({ search = '', onIncidentsChange, onRo
   }
 
   const activeCount = visibleAlerts.filter((item) => ['PENDING_DISPATCH', 'DISPATCHING', 'ESCALATED'].includes(item.status)).length;
-  return <aside className="guardian-panel" id="feeds" aria-label="Guardian alert panel">
-    <div className="guardian-panel-header"><div><p className="eyebrow"><Radio size={13}/> GUARDIAN NETWORK</p><h2>Emergency alerts</h2></div><span className={`guardian-connection ${connection}`}><i/>{connection === 'online' ? 'LIVE' : connection === 'offline' ? 'OFFLINE' : 'CONNECTING'}</span></div>
+  return <aside className="guardian-panel" id="alerts" aria-label="Guardian alert panel">
+    <div className="guardian-panel-header" id="logs"><div><p className="eyebrow"><Radio size={13}/> GUARDIAN NETWORK</p><h2>{role === 'guardian' ? 'Incident history' : 'Emergency alerts'}</h2></div><span className={`guardian-connection ${connection}`}><i/>{connection === 'online' ? 'LIVE' : connection === 'offline' ? 'OFFLINE' : 'CONNECTING'}</span></div>
     {role !== 'guardian' && <div className="guardian-access"><ShieldCheck size={15}/><span>Public feed · private details require verification</span></div>}
     {role !== 'guardian' && <div className="guardian-auth">{showTokenForm ? <form className="guardian-auth-form" onSubmit={connectGuardian}><label className="visually-hidden" htmlFor="guardian-invite">Guardian invite code</label><input id="guardian-invite" type="password" value={tokenDraft} onChange={(event) => setTokenDraft(event.target.value)} placeholder="Guardian invite code" autoComplete="current-password"/><button type="submit">VERIFY</button></form> : <button className="guardian-auth-button" onClick={() => setShowTokenForm(true)}>Verify as guardian</button>}</div>}
     {role === 'guardian' && <button className="guardian-logout" onClick={disconnectGuardian}>Disconnect guardian access</button>}

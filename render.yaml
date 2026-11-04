@@ -1,0 +1,31 @@
+services:
+  - type: web
+    name: fule-protect-api
+    runtime: node
+    plan: starter
+    buildCommand: npm ci --prefix backend
+    startCommand: npm --prefix backend start
+    healthCheckPath: /api/health
+    disk:
+      name: fule-incidents
+      mountPath: /var/data
+      sizeGB: 1
+    envVars:
+      - key: NODE_VERSION
+        value: 22
+      - key: PORT
+        value: 10000
+      - key: FULE_DATA_DIR
+        value: /var/data
+      - key: DEMO_MODE
+        value: "false"
+      - key: FRONTEND_ORIGIN
+        sync: false
+      - key: TWITCH_CLIENT_ID
+        sync: false
+      - key: TWITCH_CLIENT_SECRET
+        sync: false
+      - key: TWITCH_REDIRECT_URI
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false

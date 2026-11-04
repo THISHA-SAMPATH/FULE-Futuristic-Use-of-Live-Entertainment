@@ -3,6 +3,7 @@ node_modules/
 **/.npm-cache/
 backend/data/guardians.json
 backend/data/audit.jsonl
+backend/data/incidents.sqlite*
 .env
 **/.env
 dist/
