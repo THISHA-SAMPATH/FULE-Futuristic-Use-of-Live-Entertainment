@@ -5,6 +5,7 @@ import { isIncident } from '../../../shared/incident.mjs';
 import { API_URL } from '../config.js';
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
 import './GuardianDashboard.css';
+import { DispatchTimeline, OperatorBrief } from './DispatchTimeline.jsx';
 
 function elapsedTime(date, now) {
   const seconds = Math.max(0, Math.floor((now - Date.parse(date)) / 1000));
@@ -67,8 +68,9 @@ export default function GuardianDashboard({ search = '', onIncidentsChange, onRo
     };
     socket.on('sos_activated', upsert);
     socket.on('incident:public', (incident) => { if (roleRef.current !== 'guardian') upsert(incident); });
-    for (const event of ['incident_acknowledged', 'incident_dispatch_ready', 'incident_escalated', 'incident_updated', 'sos_cancelled', 'incident_clip_ready']) socket.on(event, upsert);
+    for (const event of ['incident_acknowledged', 'incident_dispatch_ready', 'incident_escalated', 'incident_updated', 'sos_cancelled', 'incident_clip_ready', 'dispatch_queued', 'dispatch_sent', 'dispatch_acknowledged', 'dispatch_status_updated']) socket.on(event, upsert);
     socket.on('incident:public:update', (update) => publishAlerts((current) => current.map((item) => item.incident_id === update.incident_id ? { ...item, ...update } : item)));
+    socket.on('trusted_contacts_notified', (update) => publishAlerts((current) => current.map((item) => item.incident_id === update.incident_id ? { ...item, contacts_notified_at: new Date().toISOString(), dispatch_stage: 'CONTACTS' } : item)));
     const tick = window.setInterval(() => setNow(Date.now()), 1000);
     return () => { window.clearInterval(tick); socket.disconnect(); };
   }, [guardianToken, demoMode]);
@@ -104,7 +106,19 @@ export default function GuardianDashboard({ search = '', onIncidentsChange, onRo
     sessionStorage.removeItem('fuleGuardianToken'); setGuardianToken(''); accessRole('public'); publishAlerts([]); setAckPending({}); setLoadError('');
   }
 
-  const activeCount = visibleAlerts.filter((item) => ['PENDING_DISPATCH', 'DISPATCHING', 'ESCALATED'].includes(item.status)).length;
+  async function standDown(alert) {
+    if (roleRef.current !== 'guardian' || !['SENT', 'ACKNOWLEDGED'].includes(alert.dispatch_record?.status)) return;
+    try {
+      const response = await fetch(`${API_URL}/api/dispatch/${encodeURIComponent(alert.incident_id)}/action`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${guardianToken}` },
+        body: JSON.stringify({ action: 'STAND_DOWN', reason: 'Verified guardian requested stand-down.' })
+      });
+      const result = await response.json(); if (!response.ok) throw new Error(result.error || 'Stand-down failed.');
+      publishAlerts((current) => [result.incident, ...current.filter((item) => item.incident_id !== result.incident.incident_id)]);
+    } catch (requestError) { setLoadError(requestError.message); }
+  }
+
+  const activeCount = visibleAlerts.filter((item) => ['PENDING_DISPATCH', 'DISPATCHING', 'ACKNOWLEDGED', 'ESCALATED'].includes(item.status)).length;
   return <aside className="guardian-panel" id="alerts" aria-label="Guardian alert panel">
     <div className="guardian-panel-header" id="logs"><div><p className="eyebrow"><Radio size={13}/> GUARDIAN NETWORK</p><h2>{role === 'guardian' ? 'Incident history' : 'Emergency alerts'}</h2></div><span className={`guardian-connection ${connection}`}><i/>{connection === 'online' ? 'LIVE' : connection === 'offline' ? 'OFFLINE' : 'CONNECTING'}</span></div>
     {role !== 'guardian' && <div className="guardian-access"><ShieldCheck size={15}/><span>Public feed · private details require verification</span></div>}
@@ -131,8 +145,11 @@ export default function GuardianDashboard({ search = '', onIncidentsChange, onRo
               <div className="alert-location"><MapPin size={14}/><span>{address}</span></div>
               {hasPreciseLocation && <div className="guardian-precise-location"><span>VERIFIED GUARDIAN · EXACT PIN</span><strong>{alert.location.lat}, {alert.location.lng}</strong><a href={pin} aria-label={`Open exact map pin for incident ${alert.incident_id}`}><MapPin size={13}/>Open map pin</a></div>}
               {activeStatus && <div className="escalation-countdown" role="timer" aria-label={countdown ? `Escalation in ${countdown} seconds` : 'Escalation is due'}><span><Clock3 size={13}/>ESCALATION</span><strong>{countdown ? `00:${String(countdown).padStart(2, '0')}` : 'DUE'}</strong></div>}
+              <DispatchTimeline incident={alert}/>
+              <OperatorBrief incident={alert} compact privateLocation={role === 'guardian'}/>
               <div className="alert-meta"><span>{alert.source.toUpperCase()} · {alert.status.replaceAll('_', ' ')}</span>{alert.clip_url && <a href={alert.clip_url} target="_blank" rel="noreferrer" aria-label="Open clip evidence">CLIP EVIDENCE <ArrowUpRight size={12}/></a>}</div>
               {alert.escalated && <p className="alert-escalation-note">{alert.escalation_flag}</p>}
+              {role === 'guardian' && ['SENT', 'ACKNOWLEDGED'].includes(alert.dispatch_record?.status) && alert.dispatch_stage !== 'STAND_DOWN' && <button className="stand-down-button" onClick={() => standDown(alert)}>STAND DOWN DISPATCH</button>}
               <button className={`acknowledge-button ${acknowledged ? 'acknowledged' : ''}`} onClick={() => acknowledge(alert)} disabled={acknowledged || (!alert.demo && role !== 'guardian') || Boolean(ackPending[alert.incident_id])} aria-label={acknowledged ? 'Incident acknowledged' : `Acknowledge and dispatch incident ${alert.incident_id}`}>
                 {acknowledged ? <><Check size={15}/>ACKNOWLEDGED</> : ackPending[alert.incident_id] ? <><LoaderCircle className="spinner" size={15}/>SENDING…</> : alert.demo ? <><ShieldCheck size={15}/>SIMULATE ACKNOWLEDGEMENT</> : role !== 'guardian' ? <><ShieldCheck size={15}/>GUARDIAN ACCESS REQUIRED</> : <><ShieldCheck size={15}/>ACKNOWLEDGE &amp; DISPATCH</>}
               </button>

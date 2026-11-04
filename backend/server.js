@@ -11,7 +11,10 @@ import { writeAudit } from './services/auditLog.js';
 import { deterministicFallback, synthesizeIncident } from './services/incidentSynthesizer.js';
 import { createStreamerRateLimiter, validateSosPayload } from './services/sosValidation.js';
 import { TwitchIntegration } from './services/twitchIntegration.js';
-import { loadIncidents, persistIncident, removeIncident } from './services/incidentStore.js';
+import { loadIncidents, persistIncident, removeIncident, loadTrustedContacts, saveTrustedContacts, recordFalseAlarm } from './services/incidentStore.js';
+import { createDispatchProvider, createEmergencyReport } from './services/dispatchBridge.js';
+import { createEscalationLadder } from './services/escalationLadder.js';
+import { notifyTrustedContacts } from './services/trustedContactNotifier.js';
 
 dotenv.config({ path: fileURLToPath(new URL('./.env', import.meta.url)) });
 
@@ -24,6 +27,12 @@ httpServer.maxRequestsPerSocket = 1_000;
 const port = Number(process.env.PORT) || 4000;
 const allowedOrigin = process.env.FRONTEND_ORIGIN || 'http://localhost:5173';
 const demoMode = process.env.DEMO_MODE === 'true';
+const dispatchProvider = createDispatchProvider({
+  demoMode,
+  url: process.env.DISPATCH_WEBHOOK_URL,
+  secret: process.env.DISPATCH_WEBHOOK_SECRET,
+  retries: Number(process.env.DISPATCH_WEBHOOK_RETRIES) || 2
+});
 const parsedAllowedOrigin = new URL(allowedOrigin);
 if (!['http:', 'https:'].includes(parsedAllowedOrigin.protocol) || parsedAllowedOrigin.origin !== allowedOrigin) {
   throw new Error('FRONTEND_ORIGIN must be a single HTTP(S) origin without a path.');
@@ -56,7 +65,10 @@ const io = new Server(httpServer, {
   }
 });
 const rateLimitSos = createStreamerRateLimiter({ limit: 3, windowMs: 5 * 60 * 1000 });
-const incidents = new Map(loadIncidents().map((incident) => [incident.incident_id, incident]));
+const incidents = new Map(loadIncidents().map((stored) => {
+  const incident = { ...createIncident(stored), ...(stored.streamer_id ? { streamer_id: stored.streamer_id } : {}) };
+  return [incident.incident_id, incident];
+}));
 const cancelCredentials = new Map();
 const timers = new Map();
 const inviteAttempts = new Map();
@@ -157,6 +169,13 @@ function getTwitchUser(req) {
   catch { return null; }
 }
 
+function getStreamerIdentity(req, suppliedId = '') {
+  const user = getTwitchUser(req);
+  if (user?.id) return { id: user.id, user };
+  if (demoMode && isLoopbackRequest(req) && typeof suppliedId === 'string' && suppliedId.trim()) return { id: suppliedId.trim().slice(0, 128), user: null };
+  return null;
+}
+
 function getCookie(req, name) {
   const pair = String(req.headers.cookie || '').split(';').map((item) => item.trim()).find((item) => item.startsWith(`${name}=`));
   if (!pair) return null;
@@ -164,10 +183,12 @@ function getCookie(req, name) {
   catch { return null; }
 }
 
-function isLoopbackRequest(req) {
-  const address = String(req.socket.remoteAddress || req.ip || '').toLowerCase();
+function isLoopbackAddress(value) {
+  const address = String(value || '').toLowerCase();
   return address === '::1' || address === '127.0.0.1' || address.startsWith('::ffff:127.') || address === 'localhost';
 }
+
+function isLoopbackRequest(req) { return isLoopbackAddress(req.socket.remoteAddress || req.ip); }
 
 function writeStateChange({ incident, event, fromStatus, toStatus, actorId, details }) {
   writeAudit({
@@ -186,13 +207,17 @@ function publishPublicUpdate(incident) {
     status: incident.status,
     created_at: incident.created_at,
     escalated: incident.escalated,
-    escalation_flag: incident.escalation_flag
+    escalation_flag: incident.escalation_flag,
+    dispatch_stage: incident.dispatch_stage,
+    dispatch_status: incident.dispatch_record?.status || null,
+    contacts_notified: Boolean(incident.contacts_notified_at)
   });
 }
 
 function clearIncidentTimers(incidentId) {
   const scheduled = timers.get(incidentId);
   if (scheduled) {
+    if (typeof scheduled.cancel === 'function') scheduled.cancel();
     clearTimeout(scheduled.dispatch);
     clearTimeout(scheduled.escalation);
     timers.delete(incidentId);
@@ -203,6 +228,7 @@ function changeIncident(incidentId, patch, { event, actorId, details } = {}) {
   const current = incidents.get(incidentId);
   if (!current) return null;
   const updated = createIncident({ ...current, ...patch });
+  if (current.streamer_id) updated.streamer_id = current.streamer_id;
   if (!isIncident(updated)) throw new Error('Incident state failed schema validation');
   writeStateChange({
     incident: updated,
@@ -215,6 +241,123 @@ function changeIncident(incidentId, patch, { event, actorId, details } = {}) {
   incidents.set(incidentId, updated);
   persistIncident(updated);
   return updated;
+}
+
+function emitIncidentUpdate(incident, eventName) {
+  io.to('guardians').emit(eventName, incident);
+  io.to('dispatch').emit(eventName, incident);
+  io.to(`streamer:${incident.incident_id}`).emit(eventName, incident);
+  publishPublicUpdate(incident);
+}
+
+function currentNeedsResponse(incidentId) {
+  const current = incidents.get(incidentId);
+  return Boolean(current && ['PENDING_DISPATCH', 'DISPATCHING', 'ESCALATED'].includes(current.status) && current.status !== 'ACKNOWLEDGED');
+}
+
+async function contactTrustedPeople(incidentId) {
+  const current = incidents.get(incidentId);
+  if (!current || !currentNeedsResponse(incidentId) || current.contacts_notified_at) return;
+  const contacts = loadTrustedContacts(current.streamer_id || '');
+  let result = { status: 'SKIPPED', notified: [], error: null };
+  if (contacts.length) {
+    try { result = await notifyTrustedContacts({ contacts, incident: current, demoMode }); }
+    catch (error) { result = { status: 'FAILED', notified: [], error: error.message }; }
+  }
+  const updated = changeIncident(incidentId, {
+    contacts_notified_at: new Date().toISOString(),
+    dispatch_stage: current.dispatch_record?.status === 'SENT' ? current.dispatch_stage : 'CONTACTS'
+  }, {
+    event: result.status === 'FAILED' ? 'TRUSTED_CONTACTS_NOTIFICATION_FAILED' : 'TRUSTED_CONTACTS_NOTIFIED',
+    actorId: 'system', details: `${result.status}; ${result.notified.length} contact(s)`
+  });
+  io.to('guardians').emit('trusted_contacts_notified', { incident_id: incidentId, status: result.status, count: result.notified.length });
+  io.to(`streamer:${incidentId}`).emit('trusted_contacts_notified', { incident_id: incidentId, status: result.status, count: result.notified.length });
+  publishPublicUpdate(updated);
+}
+
+async function sendToDispatch(incidentId, cause = 'ESCALATION') {
+  let current = incidents.get(incidentId);
+  if (!current || !currentNeedsResponse(incidentId) || current.dispatch_record?.status === 'SENT' || current.dispatch_record?.status === 'ACKNOWLEDGED') return;
+  const queuedRecord = current.dispatch_record?.status === 'QUEUED' ? current.dispatch_record : {
+    dispatch_id: `dispatch-${randomBytes(8).toString('hex')}`,
+    status: 'QUEUED', responder_eta_minutes: null, queued_at: new Date().toISOString(), sent_at: null, stage: 'QUEUED', simulated: demoMode
+  };
+  const queued = changeIncident(incidentId, { dispatch_record: queuedRecord, dispatch_stage: current.contacts_notified_at ? 'CONTACTS' : 'GUARDIANS' }, {
+    event: 'DISPATCH_QUEUED', actorId: 'system', details: `Dispatch queued by ${cause}; provider=${dispatchProvider.name}`
+  });
+  emitIncidentUpdate(queued, 'dispatch_queued');
+  current = incidents.get(incidentId);
+  const twitchAccount = current.streamer_contact || (current.streamer_id ? twitch.accounts.get(current.streamer_id) : null);
+  const report = createEmergencyReport(current, {
+    streamerContact: current.streamer_contact || (twitchAccount ? { streamer_id: current.streamer_id, display_name: twitchAccount.display_name || twitchAccount.login, twitch_login: twitchAccount.login } : null),
+    guardianResponses: current.guardian_responses || []
+  });
+  try {
+    let sentRecord = await dispatchProvider.dispatch(report);
+    sentRecord = { ...sentRecord, dispatch_id: sentRecord.dispatch_id || queuedRecord.dispatch_id, status: sentRecord.status || 'SENT', sent_at: sentRecord.sent_at || new Date().toISOString(), stage: 'SENT', incident_id: incidentId };
+    let latest = incidents.get(incidentId);
+    if (['CANCELLED', 'FALSE_ALARM'].includes(latest?.status)) {
+      const stoodDown = await dispatchProvider.standDown(sentRecord, 'Streamer cancelled while provider send was in flight.');
+      const cancelled = changeIncident(incidentId, { dispatch_record: { ...stoodDown, status: 'ACKNOWLEDGED', stage: 'STAND_DOWN' }, dispatch_stage: 'STAND_DOWN' }, { event: 'DISPATCH_STOOD_DOWN', actorId: 'system', details: 'Dispatch send completed after a cancellation; provider was stood down.' });
+      emitIncidentUpdate(cancelled, 'dispatch_status_updated');
+      return;
+    }
+    const escalated = changeIncident(incidentId, {
+      status: 'ESCALATED', escalated: true, escalation_flag: 'Emergency dispatch sent; if immediate danger continues, call 112.',
+      recommended_action: 'COORDINATE_WITH_EMERGENCY_DISPATCH', dispatch_record: sentRecord, dispatch_stage: 'POLICE_DISPATCHED'
+    }, { event: 'DISPATCH_SENT', actorId: 'system', details: `Dispatch sent via ${dispatchProvider.name}; ETA ${sentRecord.responder_eta_minutes ?? 'unknown'} minutes.` });
+    emitIncidentUpdate(escalated, 'dispatch_sent');
+    io.to('guardians').emit('incident_escalated', escalated);
+    io.to(`streamer:${incidentId}`).emit('incident_escalated', escalated);
+  } catch (error) {
+    const latest = incidents.get(incidentId);
+    if (!latest || ['CANCELLED', 'FALSE_ALARM'].includes(latest.status)) return;
+    const failed = changeIncident(incidentId, {
+      status: 'ESCALATED', escalated: true,
+      escalation_flag: 'Automated dispatch failed. Call emergency services (112) now.',
+      recommended_action: 'CONTACT_EMERGENCY_SERVICES_112',
+      dispatch_record: { ...queuedRecord, status: 'FAILED', sent_at: null, stage: 'FAILED' }, dispatch_stage: 'FAILED'
+    }, { event: 'DISPATCH_FAILED', actorId: 'system', details: error.message });
+    emitIncidentUpdate(failed, 'dispatch_status_updated');
+    io.to('guardians').emit('incident_escalated', failed);
+    io.to(`streamer:${incidentId}`).emit('incident_escalated', failed);
+  }
+}
+
+async function standDownDispatch(incidentId, reason, actorId) {
+  const current = incidents.get(incidentId);
+  if (!current || !['SENT', 'ACKNOWLEDGED'].includes(current.dispatch_record?.status) || current.dispatch_stage === 'STAND_DOWN') return null;
+  const record = { ...current.dispatch_record, incident_id: incidentId };
+  try {
+    const stoodDown = await dispatchProvider.standDown(record, reason || 'Incident stood down by authorized responder.');
+    const updated = changeIncident(incidentId, { dispatch_record: { ...stoodDown, status: 'ACKNOWLEDGED', stage: 'STAND_DOWN' }, dispatch_stage: 'STAND_DOWN' }, {
+      event: 'DISPATCH_STOOD_DOWN', actorId, details: 'Explicit stand-down sent to dispatch provider.'
+    });
+    emitIncidentUpdate(updated, 'dispatch_status_updated');
+    return updated;
+  } catch (error) {
+    writeAudit({ event: 'DISPATCH_STAND_DOWN_FAILED', incident_id: incidentId, actor_id: actorId, details: error.message });
+    return null;
+  }
+}
+
+async function updateDispatchStage(incidentId, stage, actorId) {
+  const current = incidents.get(incidentId);
+  if (!current || !['SENT', 'ACKNOWLEDGED'].includes(current.dispatch_record?.status)) return null;
+  try {
+    const nextRecord = await dispatchProvider.update({ ...current.dispatch_record, incident_id: incidentId }, stage);
+    const dispatchStage = stage === 'ACCEPTED' ? 'POLICE_DISPATCHED' : stage;
+    const status = stage === 'RESOLVED' ? 'RESOLVED' : current.status;
+    const updated = changeIncident(incidentId, { status, dispatch_record: { ...nextRecord, stage: dispatchStage }, dispatch_stage: dispatchStage }, {
+      event: `DISPATCH_${stage}`, actorId, details: `Dispatch control room set ${stage}.`
+    });
+    emitIncidentUpdate(updated, stage === 'ACCEPTED' ? 'dispatch_acknowledged' : 'dispatch_status_updated');
+    return updated;
+  } catch (error) {
+    writeAudit({ event: 'DISPATCH_UPDATE_FAILED', incident_id: incidentId, actor_id: actorId, details: error.message });
+    return null;
+  }
 }
 
 async function createSosIncident(input) {
@@ -250,19 +393,22 @@ async function createSosIncident(input) {
     incident_id: `sos-${activatedAt}-${randomBytes(4).toString('hex')}`, threat_level: synthesis.threat_level,
     module: payload.module_type, location: payload.location, summary: synthesis.summary,
     recommended_action: synthesis.recommended_action, status: 'PENDING_DISPATCH', created_at: new Date(activatedAt).toISOString(),
-    source: payload.source, stream_url: twitchAccount ? `https://www.twitch.tv/${twitchAccount.login}` : null
+    source: payload.source, stream_url: twitchAccount ? `https://www.twitch.tv/${twitchAccount.login}` : null,
+    transcript_snippet: payload.audio_transcript_snippet,
+    streamer_contact: { streamer_id: payload.streamer_id, display_name: twitchAccount?.display_name || (demoMode ? 'Demo Streamer' : twitchAccount?.login || 'Streamer'), twitch_login: twitchAccount?.login || '' },
+    dispatch_stage: 'GUARDIANS'
   });
   if (!isIncident(incident)) return { status: 500, body: { error: 'Incident failed schema validation.' } };
   const cancelToken = randomBytes(32).toString('base64url');
-  const graceDelayMs = Number(process.env.FULE_DISPATCH_GRACE_MS) || 10_000;
-  const escalationDelayMs = Number(process.env.FULE_ESCALATION_DELAY_MS) || 30_000;
+  const contactsDelayMs = Number(process.env.FULE_CONTACTS_DELAY_MS) || 30_000;
+  const dispatchDelayMs = Number(process.env.FULE_DISPATCH_DELAY_MS) || Number(process.env.FULE_ESCALATION_DELAY_MS) || 60_000;
   writeStateChange({ incident, event: 'SOS_CREATED', fromStatus: null, toStatus: incident.status, actorId: payload.streamer_id });
   incidents.set(incident.incident_id, { ...incident, streamer_id: payload.streamer_id });
   persistIncident(incidents.get(incident.incident_id));
-  cancelCredentials.set(incident.incident_id, { streamer_id: payload.streamer_id, token_hash: hashToken(cancelToken).toString('hex'), dispatch_ready_at: activatedAt + graceDelayMs });
+  cancelCredentials.set(incident.incident_id, { streamer_id: payload.streamer_id, token_hash: hashToken(cancelToken).toString('hex') });
   io.to('guardians').emit('sos_activated', { ...incident, grace_period_seconds: 10 });
   io.to('public').emit('incident:public', toPublicIncident(incident));
-  scheduleDispatch(incident, { graceDelayMs, escalationDelayMs });
+  scheduleDispatch(incident, { contactsDelayMs, dispatchDelayMs });
   void synthesizeIncident(synthesisInput).then((aiResult) => {
     if (!incidents.has(incident.incident_id)) return;
     const updated = changeIncident(incident.incident_id, aiResult, { event: 'AI_SYNTHESIS_UPDATED', actorId: 'system' });
@@ -283,14 +429,14 @@ async function createSosIncident(input) {
 }
 
 async function markStreamerSafe(streamerId) {
-  const current = [...incidents.values()].find((item) => item.streamer_id === streamerId && ['PENDING_DISPATCH', 'DISPATCHING', 'ESCALATED'].includes(item.status));
+  const current = [...incidents.values()].find((item) => item.streamer_id === streamerId && ['PENDING_DISPATCH', 'DISPATCHING', 'ACKNOWLEDGED', 'ESCALATED'].includes(item.status));
   if (!current) return false;
-  const credentials = cancelCredentials.get(current.incident_id);
-  if (current.status !== 'PENDING_DISPATCH' || !credentials || Date.now() > credentials.dispatch_ready_at) return false;
+  if (['SENT', 'ACKNOWLEDGED'].includes(current.dispatch_record?.status)) return false;
   clearIncidentTimers(current.incident_id);
-  const cancelled = changeIncident(current.incident_id, { status: 'FALSE_ALARM' }, { event: 'CHAT_SAFE_FALSE_ALARM', actorId: streamerId });
+  const falseAlarmCount = recordFalseAlarm(streamerId);
+  const cancelled = changeIncident(current.incident_id, { status: 'FALSE_ALARM', repeat_offender: falseAlarmCount >= 3 }, { event: 'CHAT_SAFE_FALSE_ALARM', actorId: streamerId, details: `False alarm count: ${falseAlarmCount}${falseAlarmCount >= 3 ? '; repeat-offender flag set.' : ''}` });
   cancelCredentials.delete(current.incident_id);
-  io.to('guardians').emit('sos_cancelled', cancelled); publishPublicUpdate(cancelled); return true;
+  emitIncidentUpdate(cancelled, 'sos_cancelled'); return true;
 }
 
 const twitch = new TwitchIntegration({
@@ -311,47 +457,18 @@ const twitch = new TwitchIntegration({
   onSafe: markStreamerSafe
 });
 
-function scheduleDispatch(incident, { graceDelayMs = 10_000, escalationDelayMs = 30_000 } = {}) {
+function scheduleDispatch(incident, { contactsDelayMs = 30_000, dispatchDelayMs = 60_000 } = {}) {
   const incidentId = incident.incident_id;
-  const scheduled = { dispatch: null, escalation: null };
-  scheduled.dispatch = setTimeout(() => {
-    const current = incidents.get(incidentId);
-    if (!current || current.status !== 'PENDING_DISPATCH') return;
-    try {
-      const dispatching = changeIncident(incidentId, { status: 'DISPATCHING' }, {
-        event: 'DISPATCH_GRACE_EXPIRED', details: '10-second streamer cancellation grace elapsed'
-      });
-      io.to('guardians').emit('incident_dispatch_ready', dispatching);
-      io.to(`streamer:${incidentId}`).emit('incident_dispatch_ready', dispatching);
-      cancelCredentials.delete(incidentId);
-      publishPublicUpdate(dispatching);
-
-    } catch (error) {
-      console.error('Could not mark incident ready for dispatch:', error.message);
-    }
-  }, graceDelayMs);
-  scheduled.dispatch.unref?.();
-  // The 30-second acknowledgement clock starts at SOS activation; the
-  // 10-second cancel grace is included in that window. Schedule after dispatch
-  // so equal/expired timers still transition into DISPATCHING before escalation.
-  scheduled.escalation = setTimeout(() => {
-    const current = incidents.get(incidentId);
-    if (!current || current.status !== 'DISPATCHING') return;
-    try {
-      const escalated = changeIncident(incidentId, {
-        status: 'ESCALATED',
-        escalated: true,
-        escalation_flag: 'contact emergency services (112)',
-        recommended_action: 'CONTACT_EMERGENCY_SERVICES_112'
-      }, { event: 'NO_GUARDIAN_ACK_ESCALATED', details: 'No guardian acknowledged within 30 seconds of SOS activation' });
-      io.to('guardians').emit('incident_escalated', escalated);
-      io.to(`streamer:${incidentId}`).emit('incident_escalated', escalated);
-      publishPublicUpdate(escalated);
-    } catch (error) {
-      console.error('Could not record incident escalation:', error.message);
-    }
-  }, escalationDelayMs);
-  scheduled.escalation.unref?.();
+  const scheduled = createEscalationLadder({
+    incident,
+    contactsDelayMs,
+    dispatchDelayMs,
+    isAcknowledged: () => incidents.get(incidentId)?.status === 'ACKNOWLEDGED',
+    isCancelled: () => ['CANCELLED', 'FALSE_ALARM', 'RESOLVED'].includes(incidents.get(incidentId)?.status),
+    isDispatchSent: () => ['SENT', 'ACKNOWLEDGED'].includes(incidents.get(incidentId)?.dispatch_record?.status),
+    onContacts: () => contactTrustedPeople(incidentId),
+    onDispatch: () => sendToDispatch(incidentId, incident.threat_level === 'CRITICAL' ? 'CRITICAL_THREAT' : 'T_PLUS_60')
+  });
   timers.set(incidentId, scheduled);
 }
 
@@ -377,12 +494,11 @@ function consumeInviteAttempt(key) {
 // Resume dispatch/escalation clocks for durable incidents after a process restart.
 for (const incident of incidents.values()) {
   if (!['PENDING_DISPATCH', 'DISPATCHING'].includes(incident.status)) continue;
-  const ageMs = Math.max(0, Date.now() - Date.parse(incident.created_at));
-  const graceMs = Number(process.env.FULE_DISPATCH_GRACE_MS) || 10_000;
-  const escalationMs = Number(process.env.FULE_ESCALATION_DELAY_MS) || 30_000;
+  const contactsMs = Number(process.env.FULE_CONTACTS_DELAY_MS) || 30_000;
+  const dispatchMs = Number(process.env.FULE_DISPATCH_DELAY_MS) || Number(process.env.FULE_ESCALATION_DELAY_MS) || 60_000;
   scheduleDispatch(incident, {
-    graceDelayMs: incident.status === 'PENDING_DISPATCH' ? Math.max(0, graceMs - ageMs) : 0,
-    escalationDelayMs: Math.max(0, escalationMs - ageMs)
+    contactsDelayMs: contactsMs,
+    dispatchDelayMs: dispatchMs
   });
 }
 
@@ -476,6 +592,54 @@ app.get('/api/incidents', requestLimit({ limit: 60, windowMs: 60_000 }), (req, r
   return res.json({ incidents: [...incidents.values()].map(({ streamer_id, ...incident }) => incident), guardian_id: guardian.guardian_id });
 });
 
+app.get('/api/streamer/trusted-contacts', requestLimit({ limit: 30, windowMs: 60_000 }), (req, res) => {
+  const identity = getStreamerIdentity(req, req.query?.streamer_id);
+  if (!identity) return res.status(401).json({ error: 'Connect your Twitch account to manage trusted contacts.' });
+  return res.json({ contacts: loadTrustedContacts(identity.id) });
+});
+
+app.put('/api/streamer/trusted-contacts', requestLimit({ limit: 10, windowMs: 60_000 }), (req, res) => {
+  const identity = getStreamerIdentity(req, req.body?.streamer_id);
+  if (!identity) return res.status(401).json({ error: 'Connect your Twitch account to manage trusted contacts.' });
+  const contacts = req.body?.contacts;
+  if (!Array.isArray(contacts) || contacts.length > 3) return res.status(400).json({ error: 'Add no more than three trusted contacts.' });
+  const normalized = [];
+  for (const contact of contacts) {
+    const name = typeof contact?.name === 'string' ? contact.name.trim().slice(0, 80) : '';
+    const phone = typeof contact?.phone === 'string' ? contact.phone.trim() : '';
+    if (!name || !/^\+[1-9]\d{7,14}$/.test(phone)) return res.status(400).json({ error: 'Each contact needs a name and an E.164 phone number, such as +14155550123.' });
+    normalized.push({ name, phone });
+  }
+  saveTrustedContacts(identity.id, normalized);
+  writeAudit({ event: 'TRUSTED_CONTACTS_UPDATED', actor_id: identity.id, details: `${normalized.length} trusted contact(s) saved.` });
+  return res.json({ contacts: normalized });
+});
+
+function mayAccessDispatch(req) { return Boolean(getGuardian(req) || (demoMode && isLoopbackRequest(req))); }
+
+app.get('/api/dispatch/queue', requestLimit({ limit: 60, windowMs: 60_000 }), (req, res) => {
+  if (!mayAccessDispatch(req)) return res.status(403).json({ error: 'Verified guardian or local demo access required.' });
+  const queue = [...incidents.values()]
+    .filter((item) => item.dispatch_record && !['RESOLVED', 'STAND_DOWN'].includes(item.dispatch_stage))
+    .map(({ streamer_id, ...incident }) => incident)
+    .sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at));
+  return res.json({ simulated: demoMode, incidents: queue });
+});
+
+app.post('/api/dispatch/:incidentId/action', requestLimit({ limit: 60, windowMs: 60_000 }), async (req, res) => {
+  if (!mayAccessDispatch(req)) return res.status(403).json({ error: 'Verified guardian or local demo access required.' });
+  const incidentId = String(req.params.incidentId || '');
+  const action = String(req.body?.action || '').toUpperCase();
+  const actor = getGuardian(req)?.guardian_id || 'demo-dispatch-console';
+  if (action === 'STAND_DOWN') {
+    const updated = await standDownDispatch(incidentId, String(req.body?.reason || 'Dispatch control room stand-down.'), actor);
+    return updated ? res.json({ incident: updated }) : res.status(409).json({ error: 'Dispatch has not been sent or stand-down failed.' });
+  }
+  if (!['ACCEPT', 'EN_ROUTE', 'RESOLVED'].includes(action)) return res.status(400).json({ error: 'action must be ACCEPT, EN_ROUTE, RESOLVED, or STAND_DOWN.' });
+  const updated = await updateDispatchStage(incidentId, action === 'ACCEPT' ? 'ACCEPTED' : action, actor);
+  return updated ? res.json({ incident: updated }) : res.status(409).json({ error: 'Incident is not available for dispatch status update.' });
+});
+
 app.post('/api/sos', requestLimit({ limit: Number(process.env.FULE_SOS_IP_LIMIT) || 6, windowMs: 60_000 }), async (req, res) => {
   const user = getTwitchUser(req);
   const authenticatedStreamer = user && req.body?.streamer_id === user.id;
@@ -501,6 +665,7 @@ io.on('connection', (socket) => {
     expirationTimer.unref?.();
     socket.on('disconnect', () => clearTimeout(expirationTimer));
   } else socket.join('public');
+  if ((demoMode && isLoopbackAddress(socket.handshake.address)) || socket.data.role === 'guardian') socket.join('dispatch');
   socket.emit('fule:access', { role: socket.data.role, guardian_id: socket.data.guardianId || null });
 
   socket.on('register_streamer', (payload = {}) => {
@@ -508,14 +673,14 @@ io.on('connection', (socket) => {
     const { incident_id, streamer_id, cancel_token } = payload;
     const incident = incidents.get(String(incident_id || ''));
     const credentials = cancelCredentials.get(String(incident_id || ''));
-    if (!incident || incident.status !== 'PENDING_DISPATCH' || !credentials || credentials.streamer_id !== streamer_id || !tokenMatches(cancel_token, credentials.token_hash)) {
+    if (!incident || !['PENDING_DISPATCH', 'DISPATCHING', 'ACKNOWLEDGED', 'ESCALATED'].includes(incident.status) || ['SENT', 'ACKNOWLEDGED'].includes(incident.dispatch_record?.status) || !credentials || credentials.streamer_id !== streamer_id || !tokenMatches(cancel_token, credentials.token_hash)) {
       socket.emit('streamer_registration_failed', { incident_id: incident_id || null });
       return;
     }
     socket.data.streamerIncidentId = incident.incident_id;
     socket.data.streamerId = streamer_id;
     socket.join(`streamer:${incident.incident_id}`);
-    socket.emit('streamer_registered', { incident_id: incident.incident_id, dispatch_ready_at: new Date(credentials.dispatch_ready_at).toISOString() });
+    socket.emit('streamer_registered', { incident_id: incident.incident_id });
   });
 
   socket.on('acknowledge_incident', (incidentId) => {
@@ -526,12 +691,13 @@ io.on('connection', (socket) => {
     clearIncidentTimers(current.incident_id);
     try {
       const acknowledged = changeIncident(current.incident_id, {
-        status: 'ACKNOWLEDGED', acknowledged_by: socket.data.guardianId
+        status: 'ACKNOWLEDGED', acknowledged_by: socket.data.guardianId,
+        acknowledged_at: new Date().toISOString(),
+        guardian_responses: [...(current.guardian_responses || []), { guardian_id: socket.data.guardianId, at: new Date().toISOString(), action: 'ACKNOWLEDGED' }]
       }, { event: 'INCIDENT_ACKNOWLEDGED', actorId: socket.data.guardianId });
-      io.to('guardians').emit('incident_acknowledged', acknowledged);
-      io.to(`streamer:${current.incident_id}`).emit('incident_acknowledged', acknowledged);
-      cancelCredentials.delete(current.incident_id);
-      publishPublicUpdate(acknowledged);
+      emitIncidentUpdate(acknowledged, 'incident_acknowledged');
+      // Keep the streamer capability while dispatch is only queued so the
+      // originator can still cancel before a provider reports SENT.
     } catch (error) {
       console.error('Could not acknowledge incident:', error.message);
     }
@@ -542,18 +708,19 @@ io.on('connection', (socket) => {
     const current = incidentId && incidents.get(incidentId);
     const credentials = incidentId && cancelCredentials.get(incidentId);
     if (!current || !credentials || socket.data.streamerId !== credentials.streamer_id || payload.incident_id !== incidentId) return;
-    if (current.status !== 'PENDING_DISPATCH' || Date.now() > credentials.dispatch_ready_at) {
-      socket.emit('streamer_action_rejected', { incident_id: incidentId, reason: 'The 10-second dispatch grace window has ended.' });
+    if (['SENT', 'ACKNOWLEDGED'].includes(current.dispatch_record?.status)) {
+      socket.emit('streamer_action_rejected', { incident_id: incidentId, reason: 'Dispatch has been sent. Use Stand down to notify the dispatch provider.' });
       return;
     }
     clearIncidentTimers(incidentId);
     try {
-      const cancelled = changeIncident(incidentId, { status }, {
-        event: eventName.toUpperCase(), actorId: socket.data.streamerId
+      const falseAlarmCount = status === 'FALSE_ALARM' ? recordFalseAlarm(socket.data.streamerId) : null;
+      const cancelled = changeIncident(incidentId, { status, repeat_offender: falseAlarmCount != null && falseAlarmCount >= 3 }, {
+        event: eventName.toUpperCase(), actorId: socket.data.streamerId,
+        details: falseAlarmCount == null ? 'Streamer cancelled before dispatch was sent.' : `False alarm count: ${falseAlarmCount}${falseAlarmCount >= 3 ? '; repeat-offender flag set.' : ''}`
       });
       cancelCredentials.delete(incidentId);
-      io.to('guardians').emit('sos_cancelled', cancelled);
-      publishPublicUpdate(cancelled);
+      emitIncidentUpdate(cancelled, 'sos_cancelled');
       socket.emit('streamer_action_confirmed', { incident_id: incidentId, status });
     } catch (error) {
       console.error('Could not cancel SOS:', error.message);
@@ -562,6 +729,13 @@ io.on('connection', (socket) => {
 
   socket.on('false_alarm', handleStreamerCancellation('false_alarm', 'FALSE_ALARM'));
   socket.on('cancel_sos', handleStreamerCancellation('cancel_sos', 'CANCELLED'));
+  socket.on('stand_down', async ({ incident_id, reason } = {}) => {
+    const authorized = (socket.data.role === 'guardian' && socket.data.guardianId)
+      || (socket.data.streamerIncidentId === incident_id && incidents.get(incident_id)?.streamer_id === socket.data.streamerId);
+    if (!authorized || typeof incident_id !== 'string') return;
+    const updated = await standDownDispatch(incident_id, String(reason || '').slice(0, 250), socket.data.guardianId || socket.data.streamerId);
+    if (!updated) socket.emit('streamer_action_rejected', { incident_id, reason: 'Could not send stand-down to dispatch.' });
+  });
 });
 
 httpServer.listen(port, () => {

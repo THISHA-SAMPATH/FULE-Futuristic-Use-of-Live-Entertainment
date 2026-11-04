@@ -10,6 +10,8 @@ import MapCard from './components/MapCard.jsx';
 import { SosButton, CancelToast } from './components/SosButton.jsx';
 import { LiveStreamsSection, TopGuardiansSection } from './components/CommunitySections.jsx';
 import { SafetyCategories, FeatureBanners } from './components/HomeSections.jsx';
+import { DispatchTimeline, OperatorBrief } from './components/DispatchTimeline.jsx';
+import TrustedContacts from './components/TrustedContacts.jsx';
 import DemoTriggers from './components/DemoTriggers.jsx';
 import useDemoFeed from './hooks/useDemoFeed.js';
 import useLoudAlarm from './hooks/useLoudAlarm.js';
@@ -40,8 +42,8 @@ export default function App() {
   const streamerSocketRef = useRef(null);
   const demoAlerts = useDemoFeed(DEMO_MODE);
   const active = Boolean(
-    (activeIncident && ['PENDING_DISPATCH', 'DISPATCHING', 'ESCALATED'].includes(activeIncident.status))
-    || incidents.some((item) => ['PENDING_DISPATCH', 'DISPATCHING', 'ESCALATED'].includes(item.status))
+    (activeIncident && ['PENDING_DISPATCH', 'DISPATCHING', 'ACKNOWLEDGED', 'ESCALATED'].includes(activeIncident.status))
+    || incidents.some((item) => ['PENDING_DISPATCH', 'DISPATCHING', 'ACKNOWLEDGED', 'ESCALATED'].includes(item.status))
   );
 
   useEffect(() => {
@@ -54,8 +56,8 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (activeIncident?.status !== 'PENDING_DISPATCH') { setRemaining(0); return undefined; }
-    const update = () => setRemaining(Math.max(0, Math.ceil((Date.parse(activeIncident.created_at) + 10_000 - Date.now()) / 1000)));
+    if (!activeIncident || !['PENDING_DISPATCH', 'DISPATCHING', 'ACKNOWLEDGED'].includes(activeIncident.status) || ['SENT', 'ACKNOWLEDGED'].includes(activeIncident.dispatch_record?.status)) { setRemaining(0); return undefined; }
+    const update = () => setRemaining(Math.max(0, Math.ceil((Date.parse(activeIncident.created_at) + 60_000 - Date.now()) / 1000)));
     update(); const timer = window.setInterval(update, 250); return () => window.clearInterval(timer);
   }, [activeIncident]);
 
@@ -71,7 +73,8 @@ export default function App() {
       socket.on('connect', () => socket.emit('register_streamer', { incident_id: result.incident.incident_id, streamer_id: result.streamer.id, cancel_token: result.streamer_cancel_token }));
       socket.on('streamer_action_confirmed', ({ status }) => setActiveIncident((current) => current ? { ...current, status } : current));
       socket.on('streamer_action_rejected', ({ reason }) => setError(reason || 'The cancel window has ended.'));
-      socket.on('incident_dispatch_ready', setActiveIncident); socket.on('incident_acknowledged', setActiveIncident); socket.on('incident_escalated', setActiveIncident); socket.on('incident_updated', setActiveIncident);
+      for (const event of ['incident_dispatch_ready', 'incident_acknowledged', 'incident_escalated', 'incident_updated', 'dispatch_queued', 'dispatch_sent', 'dispatch_acknowledged', 'dispatch_status_updated']) socket.on(event, setActiveIncident);
+      socket.on('trusted_contacts_notified', () => setActiveIncident((current) => current ? { ...current, contacts_notified_at: new Date().toISOString(), dispatch_stage: 'CONTACTS' } : current));
       setActiveIncident(result.incident);
       setAlertsOpen(true);
     } catch (requestError) { setError(requestError.message || 'SOS could not be sent.'); }
@@ -95,6 +98,7 @@ export default function App() {
   }, [alertsOpen]);
 
   const cancelSos = () => activeIncident && streamerSocketRef.current?.emit('cancel_sos', { incident_id: activeIncident.incident_id });
+  const standDownSos = () => activeIncident && streamerSocketRef.current?.emit('stand_down', { incident_id: activeIncident.incident_id, reason: 'Streamer requested an explicit stand-down.' });
   const filteredIncidents = useMemo(() => {
     const query = search.trim().toLowerCase(); if (!query) return incidents;
     return incidents.filter((item) => [item.summary, item.location?.address, item.status, item.threat_level].some((value) => String(value || '').toLowerCase().includes(query)));
@@ -128,9 +132,11 @@ export default function App() {
       {error && <div className="global-error" role="alert"><AlertTriangle size={16}/><span>{error}</span>{error.includes('Connect your Twitch account') && <a href={`${API_URL}/auth/twitch`}>Connect Twitch</a>}<button onClick={() => setError('')} aria-label="Dismiss error">×</button></div>}
       <div className="main-dashboard-grid gamey-grid"><div className="feed-column gamey-feed">
         <Hero active={Boolean(active)} featuredStream={featuredStream} carouselStreams={carouselStreams} demoMode={DEMO_MODE} onOpenAlerts={() => setAlertsOpen(true)}/>
+        {activeIncident && <section className="active-response-card"><div className="active-response-heading"><span>LIVE RESPONSE STATUS</span><strong>{activeIncident.dispatch_record?.status || 'GUARDIANS ALERTED'}</strong></div><DispatchTimeline incident={activeIncident}/><OperatorBrief incident={activeIncident} privateLocation/>{activeIncident.repeat_offender && <p className="repeat-offender-flag">Repeat false-alarm pattern flagged for review.</p>}</section>}
         <SafetyCategories selected={category} onSelect={setCategory}/>
         <FeatureBanners/>
         {DEMO_MODE && <details className="demo-drawer"><summary>Demo controls <span>Simulated triggers · no real contacts</span></summary><DemoTriggers onTrigger={triggerSos} disabled={Boolean(active)} sending={sending}/></details>}
+        <TrustedContacts streamerId={twitchUser?.id || 'demo-streamer'} connected={Boolean(twitchUser)} demoMode={DEMO_MODE}/>
         <details className="insights-drawer"><summary>Demo &amp; Insights <span>Network pulse, anonymized map and live stream directory</span></summary><div className="insights-content"><NetworkPulse stats={networkStats} demoMode={DEMO_MODE}/><MapCard incidents={incidents} demoMode={DEMO_MODE}/><LiveStreamsSection demoMode={DEMO_MODE} incidents={filteredIncidents} search={search} category={category}/><TopGuardiansSection demoMode={DEMO_MODE} search={search}/></div></details>
         <section className="alarm-option-card" id="settings"><span className="alarm-option-icon"><BellRing size={17}/></span><span><strong>Loud emergency alarm</strong><small>Play an audible signal during your active SOS.</small></span><input type="checkbox" checked={alarmEnabled} onChange={(event) => setAlarmEnabled(event.target.checked)} aria-label="Toggle loud emergency alarm"/></section>
       </div></div>
@@ -138,6 +144,6 @@ export default function App() {
     </main>
     {alertsOpen && <div className="drawer-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setAlertsOpen(false); }}><section className="alert-drawer" role="dialog" aria-modal="true" aria-label="Emergency alerts"><button className="drawer-close" onClick={() => setAlertsOpen(false)} aria-label="Close alerts"><X size={18}/></button><AlertPanel search={search} onIncidentsChange={setIncidents} onRoleChange={setRole} onStatus={setSocketStatus} demoMode={DEMO_MODE} demoAlerts={demoAlerts}/></section></div>}
     <SosButton onClick={triggerSos} sending={sending} active={Boolean(active)}/>
-    <CancelToast incident={activeIncident} seconds={remaining} onCancel={cancelSos}/>
+    <CancelToast incident={activeIncident} seconds={remaining} onCancel={cancelSos} onStandDown={standDownSos}/>
   </div>;
 }

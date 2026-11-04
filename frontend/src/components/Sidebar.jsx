@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Bell, Bookmark, Clapperboard, Compass, House, ShieldCheck, UsersRound, ChevronDown, BadgeCheck } from 'lucide-react';
+import { Bell, Bookmark, Clapperboard, Compass, House, ShieldCheck, UsersRound, ChevronDown, BadgeCheck, Siren } from 'lucide-react';
 import { DEMO_GUARDIANS } from '../demo/seedData.js';
 
 const LINKS = [
@@ -9,6 +9,7 @@ const LINKS = [
   { name: 'Saved Evidence', href: '#alerts', icon: Bookmark, alert: true },
   { name: 'My Clips', href: '#streams', icon: Clapperboard, insights: true },
   { name: 'Explore Communities', href: '#categories', icon: Compass },
+  { name: 'Police Control Room', href: '/dispatch', icon: Siren },
 ];
 const COMMUNITIES = [
   { initials: 'WS', name: "Women's Safety Network", members: '2.4k', color: 'community-coral' },

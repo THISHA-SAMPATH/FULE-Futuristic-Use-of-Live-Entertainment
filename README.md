@@ -2,7 +2,7 @@
 
 FULE is a Twitch-centered women's safety and civic guardian network. The **FULE Protect** hackathon MVP lets a streamer raise a simulated SOS, sends a structured alert to verified guardians in real time, and records the incident for later review.
 
-> **Responsible use:** FULE supplements, but does not replace, emergency services (112). This hackathon prototype does not contact emergency services and must not be relied on during a real emergency.
+> **Responsible use:** FULE supplements, but does not replace, emergency services (112). Demo mode uses a simulated dispatch provider and never calls an emergency number. Production dispatch requires an official integration with the local emergency authority and operational approval.
 
 ## Architecture
 
@@ -14,13 +14,27 @@ flowchart LR
   API --> Audit[Append-only audit log]
   API -->|private exact incident| Guardians[Verified guardian Socket.IO room]
   API -->|coarse redacted alert| Public[Public Socket.IO room]
+  API -->|T+30 without ack| Twilio[Trusted contacts · Twilio]
+  API -->|T+60 or immediate critical| Bridge[Dispatch Bridge]
+  Bridge --> Sim[SimulatedDispatch · demo default]
+  Bridge --> Webhook[Signed HMAC webhook · production]
+  Webhook --> Authority[Official local emergency authority]
+  Dispatch[Police control room /dispatch] -->|Accept · En route · Resolved| API
   Twitch[Twitch OAuth + EventSub] --> API
   Guardians -->|acknowledge / history| API
 ```
 
 The frontend is React + Vite. The backend is Node.js + Express + Socket.IO. `shared/incident.mjs` defines the shared incident schema and public redaction. SQLite at `backend/data/incidents.sqlite` persists incident state and history. The data directory also contains hashed guardian invites and the audit log. Configure `FULE_DATA_DIR` to a persistent volume in deployment.
 
-Precise coordinates and private incident details are delivered to verified guardians only. Public alerts are anonymized/coarse. OpenAI receives coordinates rounded to two decimal places. Secrets remain on the backend.
+Precise coordinates and private incident details go only to verified guardians, the streamer's configured trusted contacts, and the dispatch provider. Public alerts are anonymized/coarse. OpenAI receives coordinates rounded to two decimal places. Secrets remain on the backend.
+
+## Emergency dispatch
+
+Guardians are alerted at T+0. If nobody acknowledges by T+30 seconds, FULE notifies up to three streamer-managed trusted contacts; the demo mocks Twilio, while production uses the configured Twilio account. At T+60 seconds without acknowledgement, FULE sends the structured report to the Dispatch Bridge. `CRITICAL` incidents dispatch immediately. In demo mode the bridge uses `SimulatedDispatch`; no emergency number is called. In production, set `DISPATCH_WEBHOOK_URL` and `DISPATCH_WEBHOOK_SECRET` only after an official local emergency authority has approved the integration. Webhook requests carry an HMAC-SHA256 signature in `x-fule-signature` and retry transient failures.
+
+Open `/dispatch` for the clearly labeled **SIMULATED DISPATCH** control room in local demo mode. Verified guardians can also access the live queue. The queue includes precise location and transcript details, so it is restricted to guardians and the local simulated dispatch view. Control-room actions update the streamer and guardian dashboards over Socket.IO. A report may be cancelled before dispatch is sent; once sent, use **Stand down** to notify the provider. The dashboard and control room include a `tel:112` action for a person to place a call themselves.
+
+Trusted contacts can be managed from the dashboard's **Trusted Contacts** drawer/section. Store at most three E.164 phone numbers. Contact records are kept server-side in the SQLite incident store. Set `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, and `TWILIO_FROM_NUMBER` for production notifications; these are ignored in demo mode.
 
 ## Local quickstart
 

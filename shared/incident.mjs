@@ -5,13 +5,16 @@ export const THREAT_LEVELS = Object.freeze(['LOW', 'ELEVATED', 'HIGH', 'CRITICAL
 export const INCIDENT_STATUSES = Object.freeze([
   'PENDING_DISPATCH', 'DISPATCHING', 'ACKNOWLEDGED', 'CANCELLED', 'FALSE_ALARM', 'ESCALATED', 'RESOLVED'
 ]);
+export const DISPATCH_STATUSES = Object.freeze(['QUEUED', 'SENT', 'ACKNOWLEDGED', 'FAILED']);
+export const DISPATCH_STAGES = Object.freeze(['ALERTED', 'GUARDIANS', 'CONTACTS', 'POLICE_DISPATCHED', 'EN_ROUTE', 'RESOLVED', 'STAND_DOWN', 'FAILED']);
 
 export const INCIDENT_SCHEMA = Object.freeze({
   type: 'object',
   additionalProperties: false,
   required: [
     'incident_id', 'threat_level', 'module', 'location', 'summary',
-    'recommended_action', 'status', 'created_at', 'acknowledged_by', 'clip_url', 'stream_url', 'source', 'escalated', 'escalation_flag'
+    'recommended_action', 'status', 'created_at', 'acknowledged_by', 'clip_url', 'stream_url', 'source', 'escalated', 'escalation_flag',
+    'transcript_snippet', 'streamer_contact', 'guardian_responses', 'acknowledged_at', 'contacts_notified_at', 'dispatch_record', 'dispatch_stage', 'repeat_offender'
   ],
   properties: {
     incident_id: { type: 'string' },
@@ -35,7 +38,15 @@ export const INCIDENT_SCHEMA = Object.freeze({
     stream_url: { type: ['string', 'null'] },
     source: { type: 'string', enum: [...INCIDENT_SOURCES] },
     escalated: { type: 'boolean' },
-    escalation_flag: { type: ['string', 'null'] }
+    escalation_flag: { type: ['string', 'null'] },
+    transcript_snippet: { type: 'string' },
+    streamer_contact: { type: ['object', 'null'] },
+    guardian_responses: { type: 'array' },
+    acknowledged_at: { type: ['string', 'null'] },
+    contacts_notified_at: { type: ['string', 'null'] },
+    dispatch_record: { type: ['object', 'null'] },
+    dispatch_stage: { type: 'string', enum: [...DISPATCH_STAGES] },
+    repeat_offender: { type: 'boolean' }
   }
 });
 
@@ -53,7 +64,15 @@ export function createIncident({
   stream_url = null,
   source = 'button',
   escalated = false,
-  escalation_flag = null
+  escalation_flag = null,
+  transcript_snippet = '',
+  streamer_contact = null,
+  guardian_responses = [],
+  acknowledged_at = null,
+  contacts_notified_at = null,
+  dispatch_record = null,
+  dispatch_stage = 'ALERTED',
+  repeat_offender = false
 }) {
   const lat = location?.lat == null ? null : Number(location.lat);
   const lng = location?.lng == null ? null : Number(location.lng);
@@ -79,7 +98,27 @@ export function createIncident({
     stream_url: typeof stream_url === 'string' && stream_url ? stream_url.slice(0, 1000) : null,
     source: safeSource,
     escalated: Boolean(escalated),
-    escalation_flag: escalation_flag == null ? null : String(escalation_flag).slice(0, 160)
+    escalation_flag: escalation_flag == null ? null : String(escalation_flag).slice(0, 160),
+    transcript_snippet: String(transcript_snippet || '').slice(0, 1000),
+    streamer_contact: streamer_contact && typeof streamer_contact === 'object' ? {
+      streamer_id: String(streamer_contact.streamer_id || '').slice(0, 128),
+      display_name: String(streamer_contact.display_name || 'Streamer').slice(0, 120),
+      twitch_login: String(streamer_contact.twitch_login || '').slice(0, 50)
+    } : null,
+    guardian_responses: Array.isArray(guardian_responses) ? guardian_responses.slice(0, 20).map((response) => ({ guardian_id: String(response.guardian_id || '').slice(0, 120), at: String(response.at || ''), action: String(response.action || '').slice(0, 40) })) : [],
+    acknowledged_at: acknowledged_at == null ? null : String(acknowledged_at),
+    contacts_notified_at: contacts_notified_at == null ? null : String(contacts_notified_at),
+    dispatch_record: dispatch_record && typeof dispatch_record === 'object' && DISPATCH_STATUSES.includes(dispatch_record.status) ? {
+      dispatch_id: String(dispatch_record.dispatch_id || '').slice(0, 128),
+      status: dispatch_record.status,
+      responder_eta_minutes: Number.isFinite(dispatch_record.responder_eta_minutes) ? dispatch_record.responder_eta_minutes : null,
+      queued_at: String(dispatch_record.queued_at || ''),
+      sent_at: dispatch_record.sent_at == null ? null : String(dispatch_record.sent_at),
+      stage: String(dispatch_record.stage || '').slice(0, 40),
+      simulated: Boolean(dispatch_record.simulated)
+    } : null,
+    dispatch_stage: DISPATCH_STAGES.includes(dispatch_stage) ? dispatch_stage : 'ALERTED',
+    repeat_offender: Boolean(repeat_offender)
   };
 }
 
@@ -97,7 +136,9 @@ export function toPublicIncident(incident) {
     acknowledged_by: null,
     clip_url: null,
     stream_url: null,
-    escalation_flag: incident.escalation_flag
+    escalation_flag: incident.escalation_flag,
+    transcript_snippet: '', streamer_contact: null, guardian_responses: [], acknowledged_at: null,
+    dispatch_record: null, dispatch_stage: incident.dispatch_stage, repeat_offender: false
   };
 }
 
@@ -120,5 +161,13 @@ export function isIncident(value) {
     && (typeof value.stream_url === 'string' || value.stream_url === null)
     && INCIDENT_SOURCES.includes(value.source)
     && typeof value.escalated === 'boolean'
-    && (typeof value.escalation_flag === 'string' || value.escalation_flag === null);
+    && (typeof value.escalation_flag === 'string' || value.escalation_flag === null)
+    && typeof value.transcript_snippet === 'string'
+    && (value.streamer_contact === null || typeof value.streamer_contact === 'object')
+    && Array.isArray(value.guardian_responses)
+    && (typeof value.acknowledged_at === 'string' || value.acknowledged_at === null)
+    && (typeof value.contacts_notified_at === 'string' || value.contacts_notified_at === null)
+    && (value.dispatch_record === null || DISPATCH_STATUSES.includes(value.dispatch_record.status))
+    && DISPATCH_STAGES.includes(value.dispatch_stage)
+    && typeof value.repeat_offender === 'boolean';
 }

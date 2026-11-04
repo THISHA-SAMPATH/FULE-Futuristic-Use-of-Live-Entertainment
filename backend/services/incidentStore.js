@@ -16,6 +16,15 @@ database.exec(`
     status TEXT NOT NULL,
     payload TEXT NOT NULL
   );
+  CREATE TABLE IF NOT EXISTS trusted_contacts (
+    streamer_id TEXT PRIMARY KEY,
+    contacts TEXT NOT NULL DEFAULT '[]'
+  );
+  CREATE TABLE IF NOT EXISTS false_alarm_counts (
+    streamer_id TEXT PRIMARY KEY,
+    count INTEGER NOT NULL DEFAULT 0,
+    updated_at TEXT NOT NULL
+  );
   CREATE INDEX IF NOT EXISTS incidents_created_at ON incidents(created_at DESC);
 `);
 
@@ -28,6 +37,10 @@ const saveStatement = database.prepare(`
     payload = excluded.payload
 `);
 const deleteStatement = database.prepare('DELETE FROM incidents WHERE incident_id = ?');
+const getContactsStatement = database.prepare('SELECT contacts FROM trusted_contacts WHERE streamer_id = ?');
+const saveContactsStatement = database.prepare('INSERT INTO trusted_contacts(streamer_id, contacts) VALUES (?, ?) ON CONFLICT(streamer_id) DO UPDATE SET contacts=excluded.contacts');
+const incrementFalseAlarmsStatement = database.prepare(`INSERT INTO false_alarm_counts(streamer_id, count, updated_at) VALUES (?, 1, ?)
+  ON CONFLICT(streamer_id) DO UPDATE SET count=count+1, updated_at=excluded.updated_at`);
 
 export function loadIncidents() {
   return database.prepare('SELECT payload FROM incidents ORDER BY created_at DESC').all()
@@ -40,6 +53,21 @@ export function persistIncident(incident) {
 
 export function removeIncident(incidentId) {
   deleteStatement.run(incidentId);
+}
+
+export function loadTrustedContacts(streamerId) {
+  const value = getContactsStatement.get(streamerId)?.contacts;
+  return value ? JSON.parse(value) : [];
+}
+
+export function saveTrustedContacts(streamerId, contacts) {
+  saveContactsStatement.run(streamerId, JSON.stringify(contacts));
+  return contacts;
+}
+
+export function recordFalseAlarm(streamerId) {
+  incrementFalseAlarmsStatement.run(streamerId, new Date().toISOString());
+  return database.prepare('SELECT count FROM false_alarm_counts WHERE streamer_id = ?').get(streamerId)?.count || 0;
 }
 
 export function closeIncidentStore() {

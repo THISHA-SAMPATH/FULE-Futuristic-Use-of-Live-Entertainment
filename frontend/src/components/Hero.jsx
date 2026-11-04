@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { motion, useReducedMotion } from 'framer-motion';
-import { ArrowLeft, ArrowRight, Eye, Radio, ShieldCheck, UsersRound } from 'lucide-react';
+import { ArrowLeft, ArrowRight, Eye, PhoneCall, Radio, ShieldCheck, UsersRound } from 'lucide-react';
 import { twitchPlayerUrl } from '../streamAccess.js';
 
 function Artwork({ scene = 'violet' }) {
@@ -42,6 +42,6 @@ export default function Hero({ active, featuredStream, demoMode, carouselStreams
       {right && streams.length > 2 && <button className="carousel-side right" onClick={() => next(1)} aria-label={`Show next stream: ${right.title}`}><SideSlide stream={right}/></button>}
       {active && <span className="carousel-emergency-tag"><ShieldCheck size={15}/> LIVE EMERGENCY FEED</span>}
     </div>
-    <div className="carousel-footer"><span><i className="carousel-response-dot"/> {demoMode ? 'Community watch is active' : 'Verified safety feeds'}</span><span>Response time <b>{demoMode ? '00:08' : '—:—'}</b></span>{active && <button onClick={onOpenAlerts}>Open emergency alerts <ArrowRight size={14}/></button>}</div>
+    <div className="carousel-footer"><span><i className="carousel-response-dot"/> {demoMode ? 'Community watch is active' : 'Verified safety feeds'}</span><span>Response time <b>{demoMode ? '00:08' : '—:—'}</b></span><a className="hero-112-call" href="tel:112" aria-label="Call emergency services at 112"><PhoneCall size={14}/>Call 112</a>{active && <button onClick={onOpenAlerts}>Open emergency alerts <ArrowRight size={14}/></button>}</div>
   </section>;
 }
