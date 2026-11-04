@@ -1,29 +1,47 @@
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { motion, useReducedMotion } from 'framer-motion';
-import { ArrowUpRight, Headphones, Radio, ShieldCheck, UsersRound } from 'lucide-react';
+import { ArrowLeft, ArrowRight, Eye, Radio, ShieldCheck, UsersRound } from 'lucide-react';
 import { twitchPlayerUrl } from '../streamAccess.js';
-import { createSosClickHandler } from '../sosFlow.js';
+
+function Artwork({ scene = 'violet' }) {
+  return <div className={`carousel-art scene-${scene}`} aria-hidden="true"><span className="carousel-orbit orbit-one"/><span className="carousel-orbit orbit-two"/><span className="carousel-tower tower-one"/><span className="carousel-tower tower-two"/><span className="carousel-horizon"/><span className="carousel-person"/></div>;
+}
 
 function FeaturedPlayer({ stream, demoMode, active }) {
-  const isRealStream = Boolean(stream?.stream_url);
-  const liveIncident = Boolean(stream?.activeIncident || (active && isRealStream));
-  const player = isRealStream ? twitchPlayerUrl(stream.stream_url, window.location.hostname) : null;
-  return <div className="featured-player">
-    <div className="featured-art">
-      {player ? <iframe src={player} title="Featured Twitch safety stream" allow="autoplay; fullscreen" allowFullScreen/> : demoMode ? <div className={`generated-scene scene-${stream?.scene || 'violet'}`} aria-hidden="true"><span className="scene-orbit orbit-a"/><span className="scene-orbit orbit-b"/><span className="scene-tower tower-a"/><span className="scene-tower tower-b"/><span className="scene-tower tower-c"/><span className="scene-horizon"/><span className="scene-person"/></div> : <div className="featured-empty"><Radio size={26}/><strong>No featured stream</strong><span>Connect Twitch or wait for a verified community feed.</span></div>}
-      {active && <div className="emergency-overlay" role="status" aria-live="polite"><span className="emergency-beacon"/><strong>LIVE EMERGENCY</strong><span>Guardians have been notified</span></div>}
-      <div className="player-glass"><span className={`live-pill ${demoMode || liveIncident ? 'is-live' : ''}`}><i/>{demoMode || liveIncident ? 'LIVE' : isRealStream ? 'CHANNEL' : 'OFFLINE'}</span><span className="player-caption">{stream?.title || (demoMode ? 'Community watch is live' : 'Live feed unavailable')}</span><span className="player-chapter"><Radio size={13}/>{demoMode ? 'SIMULATED FEED' : liveIncident ? 'LIVE EMERGENCY' : 'VERIFIED GUARDIAN FEED'}</span></div>
+  const player = stream?.stream_url ? twitchPlayerUrl(stream.stream_url, window.location.hostname) : null;
+  return <div className="carousel-feature">
+    <div className="carousel-media">{player ? <iframe src={player} title="Featured Twitch safety stream" allow="autoplay; fullscreen" allowFullScreen/> : demoMode ? <Artwork scene={stream?.scene}/> : <div className="featured-empty"><Radio size={25}/><strong>No featured stream</strong><span>Verified community streams appear here.</span></div>}
+      <div className="carousel-media-top"><span className="carousel-live"><i/>{active ? 'EMERGENCY' : 'LIVE'}</span><span className="carousel-demo">{demoMode ? 'SIMULATED' : 'VERIFIED FEED'}</span></div>
+      {active && <div className="emergency-overlay" role="status" aria-live="polite"><span className="emergency-beacon"/><strong>EMERGENCY</strong><span>Guardians have been notified</span></div>}
     </div>
-    <div className="player-info"><div className="player-info-top"><span className="player-avatar">{stream?.initials || 'F'}</span><span className="player-streamer"><strong>{stream?.streamer || 'FULE Community'}</strong><small>{stream?.region || 'Safety network'}</small></span><span className="player-live-count"><i/>{stream?.viewers ? stream.viewers.toLocaleString() : '—'}<small>watching</small></span></div><div className="player-stats"><span><UsersRound size={14}/>{stream?.guardians ?? '—'} guardians nearby</span><span><Headphones size={14}/>Response time <b>{demoMode ? '00:08' : '—:—'}</b></span></div></div>
+    <div className="carousel-feature-info"><div><h2>{active ? 'Emergency response stream' : stream?.title || 'Community safety stream'}</h2><span className="carousel-streamer"><span className="carousel-avatar">{active ? 'SOS' : stream?.initials || 'F'}</span>{active ? 'Demo Streamer' : stream?.streamer || 'FULE community'}</span></div><div className="carousel-stats"><span><Eye size={15}/>{stream?.viewers?.toLocaleString?.() || '—'} watching</span><span><UsersRound size={15}/>{stream?.guardians ?? '—'} guardians</span></div></div>
   </div>;
 }
 
-export default function Hero({ onTrigger, sending, active, featuredStream, demoMode, onJoinGuardian }) {
+function SideSlide({ stream }) {
+  return <div className="carousel-side-card"><Artwork scene={stream?.scene}/><span className="carousel-live"><i/>LIVE</span><div className="carousel-side-copy"><strong>{stream?.title}</strong><small>{stream?.streamer}</small></div></div>;
+}
+
+export default function Hero({ active, featuredStream, demoMode, carouselStreams = [], onOpenAlerts }) {
   const reduceMotion = useReducedMotion();
-  return <section className="hero-section"><motion.div className="hero-copy" initial={reduceMotion ? false : { opacity: 0, y: 18 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.55 }}>
-    <div className="hero-eyebrow"><span className="hero-wave"><i/><i/><i/></span>THE COMMUNITY SAFETY NETWORK<span className="demo-label">{demoMode ? 'DEMO' : 'LIVE NETWORK'}</span></div>
-    <motion.h1 initial={reduceMotion ? false : { opacity: 0, y: 18 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: .65, delay: reduceMotion ? 0 : .12 }}>Go live.<br/><span>Stay safe.</span><br/>Never alone.</motion.h1>
-    <p>Live entertainment, with a community that shows up when it matters. Stream together, look out for each other.</p>
-    <div className="hero-actions"><button className="hero-primary" onClick={createSosClickHandler(onTrigger)} disabled={sending || active}><Radio size={17}/>{sending ? 'Starting stream…' : active ? 'SOS is active' : 'Start Live SOS'}</button><button className="hero-secondary" onClick={onJoinGuardian}><ShieldCheck size={17}/>Join as Guardian<ArrowUpRight size={14}/></button></div>
-    <div className="hero-trust"><span><span className="trust-check">✓</span>Verified community responders</span><span>Location shared privately</span></div>
-  </motion.div><motion.div className="hero-player-wrap" initial={reduceMotion ? false : { opacity: 0, scale: .98 }} animate={{ opacity: 1, scale: 1 }} transition={{ duration: .65, delay: .08 }}><FeaturedPlayer stream={featuredStream} demoMode={demoMode} active={active}/></motion.div></section>;
+  const streams = carouselStreams.length ? carouselStreams : featuredStream ? [featuredStream] : [];
+  const [index, setIndex] = useState(0);
+  const [paused, setPaused] = useState(false);
+  const touchStart = useRef(null);
+  const next = useCallback((step) => { if (streams.length > 1) setIndex((current) => (current + step + streams.length) % streams.length); }, [streams.length]);
+  useEffect(() => { if (active || paused || reduceMotion || streams.length < 2) return undefined; const timer = window.setInterval(() => next(1), 6000); return () => window.clearInterval(timer); }, [active, paused, reduceMotion, streams.length, next]);
+  useEffect(() => { if (index >= streams.length) setIndex(0); }, [index, streams.length]);
+  const current = streams[index] || featuredStream;
+  const left = streams[(index - 1 + streams.length) % streams.length];
+  const right = streams[(index + 1) % streams.length];
+  return <section className="hero-section carousel-section" aria-label="Featured live safety streams" onMouseEnter={() => setPaused(true)} onMouseLeave={() => setPaused(false)} onFocusCapture={() => setPaused(true)} onBlurCapture={(event) => { if (!event.currentTarget.contains(event.relatedTarget)) setPaused(false); }} onTouchStart={(event) => { touchStart.current = event.touches[0]?.clientX; }} onTouchEnd={(event) => { const delta = touchStart.current - event.changedTouches[0]?.clientX; if (Math.abs(delta) > 45) next(delta > 0 ? 1 : -1); }} onKeyDown={(event) => { if (event.key === 'ArrowLeft') next(-1); if (event.key === 'ArrowRight') next(1); }}>
+    <div className="carousel-heading"><div><span className="hero-eyebrow"><span className="hero-wave"><i/><i/><i/></span>FULE COMMUNITY LIVE <span className="demo-label">{demoMode ? 'DEMO' : 'NETWORK'}</span></span><h1>Stay safer,<br/><span>together.</span></h1><p>Real people. Shared awareness. A community that shows up when it matters.</p></div><div className="carousel-controls"><button onClick={() => next(-1)} aria-label="Previous featured stream" disabled={streams.length < 2}><ArrowLeft size={19}/></button><button onClick={() => next(1)} aria-label="Next featured stream" disabled={streams.length < 2}><ArrowRight size={19}/></button></div></div>
+    <div className={`coverflow ${active ? 'has-emergency' : ''}`}>
+      {left && streams.length > 2 && <button className="carousel-side left" onClick={() => next(-1)} aria-label={`Show previous stream: ${left.title}`}><SideSlide stream={left}/></button>}
+      <motion.div className="coverflow-active" key={active ? 'emergency' : current?.id || index} initial={reduceMotion ? false : { opacity: 0, y: 8, scale: .985 }} animate={{ opacity: 1, y: 0, scale: 1 }} transition={{ duration: reduceMotion ? 0 : .28 }}><FeaturedPlayer stream={current} demoMode={demoMode} active={active}/></motion.div>
+      {right && streams.length > 2 && <button className="carousel-side right" onClick={() => next(1)} aria-label={`Show next stream: ${right.title}`}><SideSlide stream={right}/></button>}
+      {active && <span className="carousel-emergency-tag"><ShieldCheck size={15}/> LIVE EMERGENCY FEED</span>}
+    </div>
+    <div className="carousel-footer"><span><i className="carousel-response-dot"/> {demoMode ? 'Community watch is active' : 'Verified safety feeds'}</span><span>Response time <b>{demoMode ? '00:08' : '—:—'}</b></span>{active && <button onClick={onOpenAlerts}>Open emergency alerts <ArrowRight size={14}/></button>}</div>
+  </section>;
 }

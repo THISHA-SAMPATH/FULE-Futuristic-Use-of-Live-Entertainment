@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { io } from 'socket.io-client';
-import { AlertTriangle, BellRing, Shield } from 'lucide-react';
+import { AlertTriangle, BellRing, Shield, X } from 'lucide-react';
 import Header from './components/Header.jsx';
 import Sidebar from './components/Sidebar.jsx';
 import Hero from './components/Hero.jsx';
@@ -8,7 +8,8 @@ import AlertPanel from './components/AlertPanel.jsx';
 import NetworkPulse from './components/NetworkPulse.jsx';
 import MapCard from './components/MapCard.jsx';
 import { SosButton, CancelToast } from './components/SosButton.jsx';
-import { CategoryChips, LiveStreamsSection, TopGuardiansSection } from './components/CommunitySections.jsx';
+import { LiveStreamsSection, TopGuardiansSection } from './components/CommunitySections.jsx';
+import { SafetyCategories, FeatureBanners } from './components/HomeSections.jsx';
 import DemoTriggers from './components/DemoTriggers.jsx';
 import useDemoFeed from './hooks/useDemoFeed.js';
 import useLoudAlarm from './hooks/useLoudAlarm.js';
@@ -18,6 +19,8 @@ import { submitSos } from './sosFlow.js';
 import { selectFeaturedStream } from './streamAccess.js';
 import './App.css';
 import './calmTheme.css';
+import './paletteTheme.css';
+import './dashboardLayout.css';
 
 const DEMO_MODE = import.meta.env.VITE_DEMO_MODE === 'true';
 
@@ -33,6 +36,7 @@ export default function App() {
   const [incidents, setIncidents] = useState([]);
   const [remaining, setRemaining] = useState(0);
   const [alarmEnabled, setAlarmEnabled] = useState(false);
+  const [alertsOpen, setAlertsOpen] = useState(false);
   const streamerSocketRef = useRef(null);
   const demoAlerts = useDemoFeed(DEMO_MODE);
   const active = Boolean(
@@ -69,9 +73,26 @@ export default function App() {
       socket.on('streamer_action_rejected', ({ reason }) => setError(reason || 'The cancel window has ended.'));
       socket.on('incident_dispatch_ready', setActiveIncident); socket.on('incident_acknowledged', setActiveIncident); socket.on('incident_escalated', setActiveIncident); socket.on('incident_updated', setActiveIncident);
       setActiveIncident(result.incident);
+      setAlertsOpen(true);
     } catch (requestError) { setError(requestError.message || 'SOS could not be sent.'); }
     finally { setSending(false); }
   }, [sending, active, twitchUser, startAlarm]);
+
+  useEffect(() => {
+    if (!alertsOpen) return undefined;
+    document.querySelector('.alert-drawer .drawer-close')?.focus();
+    const onKeyDown = (event) => {
+      if (event.key === 'Escape') { setAlertsOpen(false); return; }
+      if (event.key !== 'Tab') return;
+      const dialog = document.querySelector('.alert-drawer');
+      const focusable = [...(dialog?.querySelectorAll('button:not([disabled]),a[href],input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])') || [])];
+      if (!focusable.length) return;
+      if (event.shiftKey && document.activeElement === focusable[0]) { event.preventDefault(); focusable.at(-1).focus(); }
+      else if (!event.shiftKey && document.activeElement === focusable.at(-1)) { event.preventDefault(); focusable[0].focus(); }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => { window.removeEventListener('keydown', onKeyDown); document.querySelector('.notification-button')?.focus(); };
+  }, [alertsOpen]);
 
   const cancelSos = () => activeIncident && streamerSocketRef.current?.emit('cancel_sos', { incident_id: activeIncident.incident_id });
   const filteredIncidents = useMemo(() => {
@@ -92,33 +113,30 @@ export default function App() {
     }, 350);
   }
 
-  return <div className="fule-shell" id="home" data-theme={active ? 'alert' : 'calm'}>
+  const carouselStreams = DEMO_MODE ? DEMO_STREAMS : featuredStream ? [featuredStream] : [];
+  return <div className="fule-shell gamey-shell" id="home" data-theme={active ? 'alert' : 'calm'}>
     <svg className="ambient-backdrop" viewBox="0 0 1440 900" preserveAspectRatio="xMidYMid slice" aria-hidden="true" focusable="false">
       <defs><linearGradient id="fule-wave-lavender" x1="0" y1="0" x2="1" y2="1"><stop stopColor="#a78bfa" stopOpacity=".14"/><stop offset="1" stopColor="#64748b" stopOpacity=".02"/></linearGradient><linearGradient id="fule-wave-alert" x1="0" y1="0" x2="1" y2="1"><stop stopColor="#fb7185" stopOpacity=".18"/><stop offset="1" stopColor="#f59e0b" stopOpacity=".04"/></linearGradient><filter id="fule-soften"><feGaussianBlur stdDeviation="36"/></filter></defs>
       <path className="ambient-wave calm-wave" fill="url(#fule-wave-lavender)" filter="url(#fule-soften)" d="M0 155C170 55 279 90 433 176s269 124 446 34 311-159 561-72v339c-210-88-335-69-492 13S654 610 460 494 166 393 0 509z"/>
       <path className="ambient-wave alert-wave" fill="url(#fule-wave-alert)" filter="url(#fule-soften)" d="M0 191c188-89 288-66 442 12s283 143 444 54 322-157 554-52v345c-201-74-355-56-510 31s-301 126-478 26S171 472 0 568z"/>
       <circle className="ambient-orb" cx="1180" cy="170" r="145" fill="url(#fule-wave-lavender)" filter="url(#fule-soften)"/>
     </svg>
-    <Header search={search} onSearch={setSearch} onTrigger={triggerSos} sending={sending} active={Boolean(active)} user={twitchUser} unreadCount={activeCount} demoMode={DEMO_MODE}/>
-    <Sidebar connection={socketStatus} role={role} demoMode={DEMO_MODE}/>
+    <Header search={search} onSearch={setSearch} onTrigger={triggerSos} onOpenAlerts={() => setAlertsOpen(true)} alertsOpen={alertsOpen} sending={sending} active={Boolean(active)} user={twitchUser} unreadCount={activeCount} demoMode={DEMO_MODE}/>
+    <Sidebar connection={socketStatus} role={role} demoMode={DEMO_MODE} unreadCount={activeCount} onOpenAlerts={() => setAlertsOpen(true)} onOpenInsights={() => { const drawer = document.querySelector('.insights-drawer'); if (drawer) { drawer.open = true; drawer.scrollIntoView({ behavior: 'smooth', block: 'center' }); } }}/>
     <main className="dashboard-content">
       <div className="connection-strip"><span className="connection-state"><i className={DEMO_MODE || socketStatus === 'online' ? 'on' : ''}/>{DEMO_MODE ? 'DEMO COMMUNITY LIVE' : socketStatus === 'online' ? 'SAFETY NETWORK LIVE' : socketStatus === 'offline' ? 'RECONNECTING TO NETWORK' : 'CONNECTING TO NETWORK'}</span><span className="privacy-note"><Shield size={13}/>Precise location is shared only with verified guardians</span></div>
       {error && <div className="global-error" role="alert"><AlertTriangle size={16}/><span>{error}</span>{error.includes('Connect your Twitch account') && <a href={`${API_URL}/auth/twitch`}>Connect Twitch</a>}<button onClick={() => setError('')} aria-label="Dismiss error">×</button></div>}
-      <div className="main-dashboard-grid">
-        <div className="feed-column">
-          <Hero onTrigger={triggerSos} sending={sending} active={Boolean(active)} featuredStream={featuredStream} demoMode={DEMO_MODE} onJoinGuardian={joinAsGuardian}/>
-          {DEMO_MODE && <details className="demo-drawer"><summary>Demo controls <span>Simulated triggers · no real contacts</span></summary><DemoTriggers onTrigger={triggerSos} disabled={Boolean(active)} sending={sending}/></details>}
-          <CategoryChips selected={category} onSelect={setCategory}/>
-          <LiveStreamsSection demoMode={DEMO_MODE} incidents={filteredIncidents} search={search} category={category}/>
-          <NetworkPulse stats={networkStats} demoMode={DEMO_MODE}/>
-          <TopGuardiansSection demoMode={DEMO_MODE} search={search}/>
-          <MapCard incidents={incidents} demoMode={DEMO_MODE}/>
-          <section className="alarm-option-card" id="settings"><span className="alarm-option-icon"><BellRing size={17}/></span><span><strong>Loud emergency alarm</strong><small>Play an audible signal during your active SOS.</small></span><input type="checkbox" checked={alarmEnabled} onChange={(event) => setAlarmEnabled(event.target.checked)} aria-label="Toggle loud emergency alarm"/></section>
-        </div>
-        <aside className="right-column"><AlertPanel search={search} onIncidentsChange={setIncidents} onRoleChange={setRole} onStatus={setSocketStatus} demoMode={DEMO_MODE} demoAlerts={demoAlerts}/></aside>
-      </div>
+      <div className="main-dashboard-grid gamey-grid"><div className="feed-column gamey-feed">
+        <Hero active={Boolean(active)} featuredStream={featuredStream} carouselStreams={carouselStreams} demoMode={DEMO_MODE} onOpenAlerts={() => setAlertsOpen(true)}/>
+        <SafetyCategories selected={category} onSelect={setCategory}/>
+        <FeatureBanners/>
+        {DEMO_MODE && <details className="demo-drawer"><summary>Demo controls <span>Simulated triggers · no real contacts</span></summary><DemoTriggers onTrigger={triggerSos} disabled={Boolean(active)} sending={sending}/></details>}
+        <details className="insights-drawer"><summary>Demo &amp; Insights <span>Network pulse, anonymized map and live stream directory</span></summary><div className="insights-content"><NetworkPulse stats={networkStats} demoMode={DEMO_MODE}/><MapCard incidents={incidents} demoMode={DEMO_MODE}/><LiveStreamsSection demoMode={DEMO_MODE} incidents={filteredIncidents} search={search} category={category}/><TopGuardiansSection demoMode={DEMO_MODE} search={search}/></div></details>
+        <section className="alarm-option-card" id="settings"><span className="alarm-option-icon"><BellRing size={17}/></span><span><strong>Loud emergency alarm</strong><small>Play an audible signal during your active SOS.</small></span><input type="checkbox" checked={alarmEnabled} onChange={(event) => setAlarmEnabled(event.target.checked)} aria-label="Toggle loud emergency alarm"/></section>
+      </div></div>
       <footer className="page-footer"><span>FULE · FUTURISTIC USE OF LIVE ENTERTAINMENT</span><span>COMMUNITY SAFETY, WITH CONSENT AND PRIVACY</span></footer>
     </main>
+    {alertsOpen && <div className="drawer-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setAlertsOpen(false); }}><section className="alert-drawer" role="dialog" aria-modal="true" aria-label="Emergency alerts"><button className="drawer-close" onClick={() => setAlertsOpen(false)} aria-label="Close alerts"><X size={18}/></button><AlertPanel search={search} onIncidentsChange={setIncidents} onRoleChange={setRole} onStatus={setSocketStatus} demoMode={DEMO_MODE} demoAlerts={demoAlerts}/></section></div>}
     <SosButton onClick={triggerSos} sending={sending} active={Boolean(active)}/>
     <CancelToast incident={activeIncident} seconds={remaining} onCancel={cancelSos}/>
   </div>;

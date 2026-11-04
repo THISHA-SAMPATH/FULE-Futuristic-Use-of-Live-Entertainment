@@ -26,7 +26,7 @@ export function LiveStreamsSection({ demoMode, incidents, search, category }) {
 
 export function TopGuardiansSection({ demoMode, search = '' }) {
   const guardians = useMemo(() => filterGuardiansBySearch(DEMO_GUARDIANS, search), [search]);
-  return <section className="content-section" id="guardians"><SectionTitle eyebrow="PEOPLE WHO SHOW UP" title="Top Guardians" detail={demoMode ? 'Simulated verified responder profiles' : 'Responder presence from the live network'} href="#guardians"/>
+  return <section className="content-section" id="guardian-directory"><SectionTitle eyebrow="PEOPLE WHO SHOW UP" title="Top Guardians" detail={demoMode ? 'Simulated verified responder profiles' : 'Responder presence from the live network'} href="#guardian-directory"/>
     {demoMode ? guardians.length ? <div className="guardian-grid" id="community">{guardians.map((guardian, index) => <GuardianCard key={guardian.id} guardian={guardian} index={index}/>)}</div> : <div className="section-empty slim"><UsersRound size={18}/><strong>No guardians match your search</strong></div> : <div className="section-empty slim" id="community"><UsersRound size={18}/><strong>Guardian directory unavailable</strong><span>The live socket currently reports your verified connection only.</span></div>}
   </section>;
 }
