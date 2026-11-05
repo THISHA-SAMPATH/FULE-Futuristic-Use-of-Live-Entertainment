@@ -5,6 +5,7 @@ import { isIncident } from '../../../shared/incident.mjs';
 import { API_URL } from '../config.js';
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
 import { DispatchTimeline, OperatorBrief } from './DispatchTimeline.jsx';
+import IncidentLiveStream from './IncidentLiveStream.jsx';
 
 function elapsedTime(date, now) {
   const seconds = Math.max(0, Math.floor((now - Date.parse(date)) / 1000));
@@ -31,6 +32,8 @@ export default function GuardianDashboard({ search = '', onIncidentsChange, onRo
   const [demoStatuses, setDemoStatuses] = useState({});
   const [nearbyOffers, setNearbyOffers] = useState([]);
   const [dutyStatus, setDutyStatus] = useState('off');
+  const [guardianId, setGuardianId] = useState('');
+  const [acceptedIncidentIds, setAcceptedIncidentIds] = useState([]);
   const [now, setNow] = useState(Date.now());
   const socketRef = useRef(null);
   const roleRef = useRef('public');
@@ -53,7 +56,8 @@ export default function GuardianDashboard({ search = '', onIncidentsChange, onRo
         setLoadError('Guardian session expired. Verify your invite again.');
       } else setLoadError('Live alert connection failed. Reconnecting…');
     });
-    socket.on('fule:access', ({ role: nextRole }) => {
+    socket.on('fule:access', ({ role: nextRole, guardian_id }) => {
+      setGuardianId(guardian_id || '');
       accessRole(nextRole);
       if (nextRole !== 'guardian' || !guardianToken) { setLoading(false); return; }
       fetch(`${API_URL}/api/incidents`, { headers: { Authorization: `Bearer ${guardianToken}` } })
@@ -137,6 +141,7 @@ export default function GuardianDashboard({ search = '', onIncidentsChange, onRo
       const response = await fetch(`${API_URL}/api/incidents/${encodeURIComponent(offer.incident_id)}/nearby-accept`, { method: 'POST', headers: { Authorization: `Bearer ${guardianToken}`, 'Content-Type': 'application/json' }, body: '{}' });
       const result = await response.json(); if (!response.ok) throw new Error(result.error || 'Could not accept nearby alert.');
       upsert(result.incident);
+      setAcceptedIncidentIds((current) => [...new Set([...current, offer.incident_id])]);
       setNearbyOffers((current) => current.filter((item) => item.incident_id !== offer.incident_id));
       setLoadError('');
     } catch (error) { setLoadError(error.message); }
@@ -195,6 +200,7 @@ export default function GuardianDashboard({ search = '', onIncidentsChange, onRo
               <div className="alert-category">{alert.module.replaceAll('_', ' ')}</div>
               <p className="alert-summary">{alert.summary}</p>
               <div className="alert-location"><MapPin size={14}/><span>{address}</span></div>
+              {role === 'guardian' && (acceptedIncidentIds.includes(alert.incident_id) || alert.acknowledged_by === guardianId || alert.guardian_responses?.some((response) => response.guardian_id === guardianId)) && <IncidentLiveStream key={`stream-${alert.incident_id}`} incident={alert} role="guardian" guardianToken={guardianToken} compact/>}
               {hasPreciseLocation && <div className="guardian-precise-location"><span>VERIFIED GUARDIAN · EXACT PIN</span><strong>{alert.location.lat}, {alert.location.lng}</strong><a href={pin} aria-label={`Open exact map pin for incident ${alert.incident_id}`}><MapPin size={13}/>Open map pin</a></div>}
               {activeStatus && <div className="escalation-countdown" style={{ '--escalation-progress': `${Math.min(100, countdown / 60 * 100)}%` }} role="timer" aria-label={countdown ? `Escalation in ${countdown} seconds` : 'Escalation is due'}><span><Clock3 size={13}/>Escalation</span><strong>{countdown ? `00:${String(countdown).padStart(2, '0')}` : 'Due'}</strong></div>}
               <DispatchTimeline incident={alert}/>

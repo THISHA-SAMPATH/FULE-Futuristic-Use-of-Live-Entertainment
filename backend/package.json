@@ -18,6 +18,7 @@
     "lint": "node --check server.js && node --check services/incidentRepository.js && node --check services/incidentStore.js"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1162.0",
     "@sentry/node": "^11.10.0",
     "@socket.io/redis-adapter": "^8.3.0",
     "bcryptjs": "^3.0.3",
@@ -29,6 +30,7 @@
     "ioredis": "^6.0.0",
     "jsonwebtoken": "^9.0.3",
     "knex": "^3.3.0",
+    "livekit-server-sdk": "^2.19.2",
     "openai": "^5.20.0",
     "pg": "^8.23.1",
     "prom-client": "^15.1.3",

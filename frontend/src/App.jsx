@@ -15,6 +15,8 @@ import TrustedContacts from './components/TrustedContacts.jsx';
 import DemoTriggers from './components/DemoTriggers.jsx';
 import SafeWalkPanel from './components/SafeWalkPanel.jsx';
 import EvidenceRecorder from './components/EvidenceRecorder.jsx';
+import IncidentLiveStream from './components/IncidentLiveStream.jsx';
+import StandaloneAccount from './components/StandaloneAccount.jsx';
 import useDemoFeed from './hooks/useDemoFeed.js';
 import useLoudAlarm from './hooks/useLoudAlarm.js';
 import { DEMO_NETWORK, DEMO_STREAMS } from './demo/seedData.js';
@@ -29,6 +31,12 @@ export default function App() {
   const [sending, setSending] = useState(false);
   const [error, setError] = useState('');
   const [twitchUser, setTwitchUser] = useState(null);
+  const [twitchEnabled, setTwitchEnabled] = useState(false);
+  const [fuleAccount, setFuleAccount] = useState(() => {
+    try { const saved = JSON.parse(sessionStorage.getItem('fuleAccount') || 'null'); const accessToken = sessionStorage.getItem('fuleAccessToken'); return saved && accessToken ? { ...saved, access_token: accessToken } : null; }
+    catch { return null; }
+  });
+  const streamUser = twitchUser || fuleAccount;
   const [activeIncident, setActiveIncident] = useState(null);
   const [socketStatus, setSocketStatus] = useState('connecting');
   const [role, setRole] = useState('public');
@@ -38,7 +46,11 @@ export default function App() {
   const [alertsOpen, setAlertsOpen] = useState(false);
   const [nearbyAccepted, setNearbyAccepted] = useState(0);
   const [evidenceToken, setEvidenceToken] = useState('');
+  const [trustedStreamAccess, setTrustedStreamAccess] = useState(null);
+  const [streamRequested, setStreamRequested] = useState(false);
+  const [motionReady, setMotionReady] = useState(false);
   const streamerSocketRef = useRef(null);
+  const liveStreamRef = useRef(null);
   const demoAlerts = useDemoFeed(DEMO_MODE);
   const active = Boolean(
     (activeIncident && ['PENDING_DISPATCH', 'DISPATCHING', 'ACKNOWLEDGED', 'ESCALATED'].includes(activeIncident.status))
@@ -50,8 +62,17 @@ export default function App() {
     fetch(`${API_URL}/api/twitch/session`, { credentials: 'include' }).then(async (response) => {
       if (!response.ok) throw new Error('Could not load Twitch session.');
       return response.json();
-    }).then((data) => { if (live) setTwitchUser(data.user || null); }).catch((fetchError) => { if (live && !DEMO_MODE) setError(fetchError.message); });
+    }).then((data) => { if (live) { setTwitchUser(data.user || null); setTwitchEnabled(Boolean(data.integration_enabled)); } }).catch((fetchError) => { if (live && !DEMO_MODE) setError(fetchError.message); });
     return () => { live = false; };
+  }, []);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const fragment = new URLSearchParams(window.location.hash.replace(/^#/, ''));
+    const incidentId = params.get('fuleIncident'); const token = fragment.get('fuleStream');
+    if (!incidentId || !token) return;
+    setTrustedStreamAccess({ incidentId, token });
+    window.history.replaceState({}, '', window.location.pathname);
   }, []);
 
   useEffect(() => {
@@ -64,32 +85,75 @@ export default function App() {
 
   const registerStreamerIncident = useCallback((result) => {
     const socket = io(API_URL, { transports: ['websocket', 'polling'] }); streamerSocketRef.current?.disconnect(); streamerSocketRef.current = socket;
-    socket.on('connect', () => socket.emit('register_streamer', { incident_id: result.incident.incident_id, streamer_id: result.streamer?.id || twitchUser?.id || 'demo-streamer', cancel_token: result.streamer_cancel_token }));
+    socket.on('connect', () => socket.emit('register_streamer', { incident_id: result.incident.incident_id, streamer_id: result.streamer?.id || streamUser?.id || 'demo-streamer', cancel_token: result.streamer_cancel_token }));
     socket.on('streamer_action_confirmed', ({ status }) => setActiveIncident((current) => current ? { ...current, status } : current));
     socket.on('streamer_action_rejected', ({ reason }) => setError(reason || 'The cancel window has ended.'));
-    for (const event of ['incident_dispatch_ready', 'incident_acknowledged', 'incident_escalated', 'incident_updated', 'dispatch_queued', 'dispatch_sent', 'dispatch_acknowledged', 'dispatch_status_updated']) socket.on(event, setActiveIncident);
+    const updateStreamIncident = (incident) => {
+      setActiveIncident(incident);
+      if (['CANCELLED', 'FALSE_ALARM', 'RESOLVED'].includes(incident?.status) || incident?.dispatch_stage === 'STAND_DOWN') setStreamRequested(false);
+    };
+    for (const event of ['incident_dispatch_ready', 'incident_acknowledged', 'incident_escalated', 'incident_updated', 'sos_cancelled', 'dispatch_queued', 'dispatch_sent', 'dispatch_acknowledged', 'dispatch_status_updated']) socket.on(event, updateStreamIncident);
     socket.on('trusted_contacts_notified', () => setActiveIncident((current) => current ? { ...current, contacts_notified_at: new Date().toISOString(), dispatch_stage: 'CONTACTS' } : current));
     socket.on('nearby_guardians_update', (update) => setNearbyAccepted(update.accepted_count || 0));
     setNearbyAccepted(result.nearby_accepted_count || 0);
     setEvidenceToken(result.streamer_cancel_token || '');
     setActiveIncident(result.incident);
+    setStreamRequested(true);
     setAlertsOpen(true);
-  }, [twitchUser]);
+  }, [streamUser]);
 
   const handleSafeWalkEmergency = useCallback((incident, cancelToken) => {
-    registerStreamerIncident({ incident, streamer: twitchUser || { id: 'demo-streamer' }, streamer_cancel_token: cancelToken });
-  }, [registerStreamerIncident, twitchUser]);
+    registerStreamerIncident({ incident, streamer: streamUser || { id: 'demo-streamer' }, streamer_cancel_token: cancelToken });
+  }, [registerStreamerIncident, streamUser]);
 
   const triggerSos = useCallback(async (source = 'button', transcript = '') => {
     if (sending || active) return;
+    void liveStreamRef.current?.startCapture?.();
+    setStreamRequested(true);
     setError(''); setSending(true);
     startAlarm();
     try {
-      const result = await submitSos({ demoMode: DEMO_MODE, user: twitchUser, apiUrl: API_URL, source, transcript });
+      const pipelineSource = ['shake', 'shortcut'].includes(source) ? 'button' : source;
+      const result = await submitSos({ demoMode: DEMO_MODE, user: streamUser, accessToken: fuleAccount?.access_token || '', apiUrl: API_URL, source: pipelineSource, transcript });
       registerStreamerIncident(result);
     } catch (requestError) { setError(requestError.message || 'SOS could not be sent.'); }
     finally { setSending(false); }
-  }, [sending, active, twitchUser, startAlarm, registerStreamerIncident]);
+  }, [sending, active, streamUser, fuleAccount, startAlarm, registerStreamerIncident]);
+
+  useEffect(() => {
+    if (new URLSearchParams(window.location.search).get('fuleAction') === 'sos') {
+      window.history.replaceState({}, '', window.location.pathname + window.location.hash);
+      void triggerSos('shortcut', 'Home-screen emergency shortcut activated.');
+    }
+  }, [triggerSos]);
+
+  useEffect(() => {
+    if (!motionReady) return undefined;
+    let lastShakeAt = 0;
+    const handleMotion = (event) => {
+      const acceleration = event.accelerationIncludingGravity;
+      if (!acceleration) return;
+      const magnitude = Math.hypot(acceleration.x || 0, acceleration.y || 0, acceleration.z || 0);
+      const now = Date.now();
+      if (magnitude > 24 && now - lastShakeAt > 5000 && !active && !sending) {
+        lastShakeAt = now;
+        void triggerSos('shake', 'Device shake gesture activated emergency SOS.');
+      }
+    };
+    window.addEventListener('devicemotion', handleMotion, { passive: true });
+    return () => window.removeEventListener('devicemotion', handleMotion);
+  }, [triggerSos, active, sending, motionReady]);
+
+  async function enableShakeSOS() {
+    try {
+      const motionEvent = window.DeviceMotionEvent;
+      if (typeof motionEvent?.requestPermission === 'function') {
+        const permission = await motionEvent.requestPermission();
+        if (permission !== 'granted') throw new Error('Motion access was not granted.');
+      }
+      setMotionReady(true); setError('');
+    } catch (motionError) { setError(motionError.message || 'Shake SOS is unavailable in this browser.'); }
+  }
 
   useEffect(() => {
     if (!alertsOpen) return undefined;
@@ -129,23 +193,24 @@ export default function App() {
 
   const carouselStreams = DEMO_MODE ? DEMO_STREAMS : featuredStream ? [featuredStream] : [];
   return <div className="fule-shell gamey-shell" id="home" data-theme={active ? 'alert' : 'calm'}>
-    <Header search={search} onSearch={setSearch} onTrigger={triggerSos} onOpenAlerts={() => setAlertsOpen(true)} alertsOpen={alertsOpen} sending={sending} active={Boolean(active)} user={twitchUser} unreadCount={activeCount} demoMode={DEMO_MODE} category={category} onCategorySelect={setCategory}/>
+    <Header search={search} onSearch={setSearch} onTrigger={triggerSos} onOpenAlerts={() => setAlertsOpen(true)} alertsOpen={alertsOpen} sending={sending} active={Boolean(active)} user={twitchUser} account={fuleAccount} twitchEnabled={twitchEnabled} unreadCount={activeCount} demoMode={DEMO_MODE} category={category} onCategorySelect={setCategory}/>
     <Sidebar connection={socketStatus} role={role} demoMode={DEMO_MODE} unreadCount={activeCount} incidents={[...incidents, ...demoAlerts, ...(activeIncident ? [activeIncident] : [])]} onTrigger={triggerSos} sending={sending} active={Boolean(active)} onOpenAlerts={() => setAlertsOpen(true)} onOpenInsights={() => { const drawer = document.querySelector('.insights-drawer'); if (drawer) { drawer.open = true; drawer.scrollIntoView({ behavior: 'smooth', block: 'center' }); } }}/>
     <main className="dashboard-content">
-      <div className="connection-strip"><span className="connection-state"><i className={DEMO_MODE || socketStatus === 'online' ? 'on' : ''}/>{DEMO_MODE ? 'Demo community live' : socketStatus === 'online' ? 'Safety network live' : socketStatus === 'offline' ? 'Reconnecting to network' : 'Connecting to network'}</span><span className="privacy-note"><Shield size={13}/>Precise location is shared only with verified guardians</span></div>
-      {error && <div className="global-error" role="alert"><AlertTriangle size={16}/><span>{error}</span>{error.includes('Connect your Twitch account') && <a href={`${API_URL}/auth/twitch`}>Connect Twitch</a>}<button onClick={() => setError('')} aria-label="Dismiss error">×</button></div>}
+      <div className="connection-strip"><span className="connection-state"><i className={DEMO_MODE || socketStatus === 'online' ? 'on' : ''}/>{DEMO_MODE ? 'Demo community live' : socketStatus === 'online' ? 'Safety network live' : socketStatus === 'offline' ? 'Reconnecting to network' : 'Connecting to network'}</span><span className="privacy-note"><Shield size={13}/>Precise location is shared only with verified guardians</span>{!DEMO_MODE && !twitchUser && <StandaloneAccount account={fuleAccount} onAccount={setFuleAccount}/>}</div>
+      {trustedStreamAccess && <section className="active-response-card trusted-stream-entry"><h2>Private stream shared with you</h2><p>This incident stream link is limited to the invited trusted contact and expires shortly.</p><IncidentLiveStream incident={{ incident_id: trustedStreamAccess.incidentId, status: 'PENDING_DISPATCH' }} streamerId="" streamerToken="" role="trusted_contact" guardianToken={trustedStreamAccess.token} compact/></section>}
+      {error && <div className="global-error" role="alert"><AlertTriangle size={16}/><span>{error}</span>{error.includes('connect Twitch') && twitchEnabled && <a href={`${API_URL}/auth/twitch`}>Connect Twitch</a>}<button onClick={() => setError('')} aria-label="Dismiss error">×</button></div>}
       <div className="main-dashboard-grid gamey-grid"><div className="feed-column gamey-feed">
         <Hero active={Boolean(active)} featuredStream={featuredStream} carouselStreams={carouselStreams} demoMode={DEMO_MODE} onOpenAlerts={() => setAlertsOpen(true)} onTrigger={triggerSos} sending={sending}/>
-        <SafeWalkPanel demoMode={DEMO_MODE} streamer={twitchUser} activeIncident={activeIncident} onEmergency={handleSafeWalkEmergency}/>
-        {activeIncident && <section className="active-response-card"><div className="active-response-heading"><span>LIVE RESPONSE STATUS</span><strong>{activeIncident.dispatch_record?.status || 'GUARDIANS ALERTED'}</strong></div><p className="nearby-response-count" aria-live="polite">{nearbyAccepted} nearby {nearbyAccepted === 1 ? 'guardian is' : 'guardians are'} coming</p><DispatchTimeline incident={activeIncident}/><OperatorBrief incident={activeIncident} privateLocation/><EvidenceRecorder incident={activeIncident} streamerToken={evidenceToken}/>{activeIncident.repeat_offender && <p className="repeat-offender-flag">Repeat false-alarm pattern flagged for review.</p>}</section>}
+        <SafeWalkPanel demoMode={DEMO_MODE} streamer={streamUser} activeIncident={activeIncident} onEmergency={handleSafeWalkEmergency}/>
+        <section className="active-response-card" hidden={!activeIncident}><div className="active-response-heading"><span>LIVE RESPONSE STATUS</span><strong>{activeIncident?.dispatch_record?.status || 'GUARDIANS ALERTED'}</strong></div><p className="nearby-response-count" aria-live="polite">{nearbyAccepted} nearby {nearbyAccepted === 1 ? 'guardian is' : 'guardians are'} coming</p><IncidentLiveStream ref={liveStreamRef} incident={activeIncident} streamerId={activeIncident?.streamer_id || streamUser?.id || 'demo-streamer'} streamerToken={evidenceToken} accountAccessToken={fuleAccount?.access_token || ''} role="streamer" autoStart={streamRequested}/>{activeIncident && <><DispatchTimeline incident={activeIncident}/><OperatorBrief incident={activeIncident} privateLocation/><EvidenceRecorder incident={activeIncident} streamerToken={evidenceToken}/>{activeIncident.repeat_offender && <p className="repeat-offender-flag">Repeat false-alarm pattern flagged for review.</p>}</>}</section>
         <SafetyCategories selected={category} onSelect={setCategory}/>
         <FeatureBanners/>
         <LiveStreamsSection demoMode={DEMO_MODE} incidents={filteredIncidents} search={search} category={category}/>
         <TopGuardiansSection demoMode={DEMO_MODE} search={search}/>
         {DEMO_MODE && <details className="demo-drawer"><summary>Demo controls <span>Simulated triggers · no real contacts</span></summary><DemoTriggers onTrigger={triggerSos} disabled={Boolean(active)} sending={sending}/></details>}
-        <TrustedContacts streamerId={twitchUser?.id || 'demo-streamer'} connected={Boolean(twitchUser)} demoMode={DEMO_MODE}/>
+        <TrustedContacts streamerId={streamUser?.id || 'demo-streamer'} connected={Boolean(streamUser)} accessToken={fuleAccount?.access_token || ''} demoMode={DEMO_MODE}/>
         <details className="insights-drawer"><summary>Demo &amp; Insights <span>Network pulse and anonymized map</span></summary><div className="insights-content"><NetworkPulse stats={networkStats} demoMode={DEMO_MODE}/><MapCard incidents={incidents} demoMode={DEMO_MODE}/></div></details>
-        <section className="alarm-option-card" id="settings"><span className="alarm-option-icon"><BellRing size={17}/></span><span><strong>Loud emergency alarm</strong><small>Play an audible signal during your active SOS.</small></span><input type="checkbox" checked={alarmEnabled} onChange={(event) => setAlarmEnabled(event.target.checked)} aria-label="Toggle loud emergency alarm"/></section>
+        <section className="alarm-option-card" id="settings"><span className="alarm-option-icon"><BellRing size={17}/></span><span><strong>Loud emergency alarm</strong><small>Play an audible signal during your active SOS.</small></span><input type="checkbox" checked={alarmEnabled} onChange={(event) => setAlarmEnabled(event.target.checked)} aria-label="Toggle loud emergency alarm"/><button type="button" className="shake-sos-enable" onClick={enableShakeSOS} disabled={motionReady} aria-label="Enable shake gesture for emergency SOS">{motionReady ? 'Shake SOS enabled' : 'Enable shake SOS'}</button></section>
       </div></div>
       <footer className="page-footer"><span>FULE · Futuristic Use of Live Entertainment</span><span>Community safety, with consent and privacy</span></footer>
     </main>

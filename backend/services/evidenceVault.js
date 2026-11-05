@@ -52,6 +52,23 @@ export class EvidenceVault {
     }
   }
 
+  async appendExternalHash(incidentId, { sha256, storageKey, recordedAt = new Date().toISOString(), metadata = {} } = {}) {
+    if (!/^[a-zA-Z0-9_.-]{1,160}$/.test(incidentId) || !/^[a-f0-9]{64}$/.test(sha256) || typeof storageKey !== 'string' || storageKey.length > 1024) throw new Error('External evidence hash metadata is invalid.');
+    const chunkId = `ev-${randomBytes(16).toString('hex')}`;
+    return this.store.appendEvidence({
+      incident_id: incidentId,
+      build: (sequence, previousHash) => createEvidenceEntry({ chunk_id: chunkId, incident_id: incidentId, sequence, recorded_at: recordedAt, storage_key: storageKey, sha256, previous_hash: previousHash, metadata: { encryption: 'S3 server-side encryption required', ...metadata } })
+    });
+  }
+
+  async appendRetentionTombstone(targetEntry, recordedAt = new Date().toISOString()) {
+    const chunkId = `ev-retention-${randomBytes(12).toString('hex')}`;
+    return this.store.appendEvidence({
+      incident_id: targetEntry.incident_id,
+      build: (sequence, previousHash) => createEvidenceEntry({ chunk_id: chunkId, incident_id: targetEntry.incident_id, sequence, recorded_at: recordedAt, storage_key: `expired:${targetEntry.chunk_id}`, sha256: targetEntry.sha256, previous_hash: previousHash, metadata: { source: 'retention_tombstone', target_chunk_id: targetEntry.chunk_id, action: 'S3_OBJECT_DELETED' } })
+    });
+  }
+
   async readChunk(entry) {
     const path = resolve(this.directory, entry.storage_key);
     const pathFromRoot = relative(this.directory, path);
@@ -71,7 +88,8 @@ export class EvidenceVault {
   async createCaseFile(incident, { walks = [] } = {}) {
     const evidence = await this.store.listEvidence(incident.incident_id);
     const verification = verifyEvidenceChain(evidence);
-    const fileChecks = await Promise.all(evidence.map(async (entry) => {
+    const expiredRecordings = new Set(evidence.filter((entry) => entry.metadata?.source === 'retention_tombstone').map((entry) => entry.metadata.target_chunk_id));
+    const fileChecks = await Promise.all(evidence.filter((entry) => !expiredRecordings.has(entry.chunk_id) && !entry.metadata?.s3_key && entry.metadata?.source !== 'retention_tombstone').map(async (entry) => {
       try { return createHash('sha256').update(await this.readChunk(entry)).digest('hex') === entry.sha256; }
       catch { return false; }
     }));
@@ -86,8 +104,8 @@ export class EvidenceVault {
       ].sort((a, b) => Date.parse(a.at) - Date.parse(b.at)),
       clips: incident.clip_url ? [{ url: incident.clip_url, source: 'Twitch clip' }] : [],
       location_trail: walks.flatMap((walk) => walk.location_trail || []).sort((a, b) => Date.parse(a.at) - Date.parse(b.at)),
-      evidence: evidence.map(({ chunk_id, sequence, recorded_at, sha256, previous_hash, chain_hash, metadata }) => ({ chunk_id, sequence, recorded_at, sha256, previous_hash, chain_hash, metadata, download_path: `/api/incidents/${incident.incident_id}/evidence/${chunk_id}` })),
-      integrity: { algorithm: 'SHA-256 hash chain', ...verification, files_valid: fileChecks.every(Boolean), files_checked: fileChecks.length }
+      evidence: evidence.map(({ chunk_id, sequence, recorded_at, sha256, previous_hash, chain_hash, metadata }) => ({ chunk_id, sequence, recorded_at, sha256, previous_hash, chain_hash, metadata, expired: expiredRecordings.has(chunk_id), download_path: `/api/incidents/${incident.incident_id}/evidence/${chunk_id}` })),
+      integrity: { algorithm: 'SHA-256 hash chain', ...verification, files_valid: fileChecks.every(Boolean), files_checked: fileChecks.length, recordings_expired: expiredRecordings.size }
     };
   }
 }

@@ -1,0 +1,19 @@
+{
+  "name": "FULE Protect",
+  "short_name": "FULE",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0F1B33",
+  "theme_color": "#0F1B33",
+  "icons": [
+    { "src": "/fule-app-icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ],
+  "shortcuts": [
+    {
+      "name": "Start emergency SOS",
+      "short_name": "SOS",
+      "description": "Start a FULE emergency stream and alert your circle.",
+      "url": "/?fuleAction=sos"
+    }
+  ]
+}

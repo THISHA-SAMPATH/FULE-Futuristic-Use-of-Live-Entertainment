@@ -145,6 +145,10 @@ export const safetyFeatureStore = {
     if (incidentRepository.db) return Boolean(await incidentRepository.db('nearby_guardian_offers').where({ incident_id: incidentId, guardian_id }).whereNull('accepted_at').first('guardian_id'));
     return Boolean(memoryLists.get(`offers:${incidentId}`)?.has(guardianId) && !memoryLists.get(`accepts:${incidentId}`)?.has(guardianId));
   },
+  async guardianHasAcceptedOffer(incidentId, guardianId) {
+    if (incidentRepository.db) return Boolean(await incidentRepository.db('nearby_guardian_offers').where({ incident_id: incidentId, guardian_id: guardianId }).whereNotNull('accepted_at').first('guardian_id'));
+    return Boolean(memoryLists.get(`accepts:${incidentId}`)?.has(guardianId));
+  },
   async appendEvidence(entry) {
     if (incidentRepository.db) {
       return incidentRepository.db.transaction(async (trx) => {
@@ -164,5 +168,16 @@ export const safetyFeatureStore = {
   async listEvidence(incidentId) {
     if (incidentRepository.db) return incidentRepository.db('evidence_chunks').where({ incident_id: incidentId }).orderBy('sequence').select('*');
     return evidence.get(incidentId) || [];
+  },
+  async listExpiredStreamRecordings(cutoff) {
+    if (incidentRepository.db) {
+      const rows = await incidentRepository.db('evidence_chunks').whereRaw("metadata->>'source' = 'livekit_egress'").where('recorded_at', '<', cutoff).select('*');
+      const tombstones = await incidentRepository.db('evidence_chunks').whereRaw("metadata->>'source' = 'retention_tombstone'").select('metadata');
+      const expired = new Set(tombstones.map((row) => row.metadata.target_chunk_id));
+      return rows.filter((row) => !expired.has(row.chunk_id));
+    }
+    const rows = [...evidence.values()].flat();
+    const expired = new Set(rows.filter((entry) => entry.metadata?.source === 'retention_tombstone').map((entry) => entry.metadata.target_chunk_id));
+    return rows.filter((entry) => entry.metadata?.source === 'livekit_egress' && !expired.has(entry.chunk_id) && Date.parse(entry.recorded_at) < cutoff.getTime());
   }
 };

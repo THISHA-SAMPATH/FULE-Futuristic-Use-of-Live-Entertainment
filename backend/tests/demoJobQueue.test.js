@@ -4,6 +4,38 @@ import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { renameWithRetry, replaceQueueFile } from '../services/demoJobQueue.js';
+
+test('demo queue retries transient Windows rename locks from file sync clients', async () => {
+  let attempts = 0;
+  const waits = [];
+  await renameWithRetry('pending.json.tmp', 'pending.json', {
+    renameFile: async () => {
+      attempts += 1;
+      if (attempts < 4) { const error = new Error('file temporarily locked'); error.code = 'EPERM'; throw error; }
+    },
+    wait: async (delay) => { waits.push(delay); },
+    initialDelayMs: 10,
+    maxDelayMs: 100
+  });
+  assert.equal(attempts, 4);
+  assert.deepEqual(waits, [10, 20, 40]);
+});
+
+test('demo queue falls back to a locked in-place write on Windows after rename retries', async () => {
+  let renameAttempts = 0;
+  let written = null;
+  await replaceQueueFile('pending.json.tmp', 'pending.json', '[{"id":"kept"}]\n', {
+    platform: 'win32',
+    wait: async () => {},
+    renameFile: async () => { renameAttempts += 1; const error = new Error('sync client holds destination'); error.code = 'EPERM'; throw error; },
+    writeDestination: async (destination, contents, options) => { written = { destination, contents, options }; }
+  });
+  assert.equal(renameAttempts, 8);
+  assert.equal(written.destination, 'pending.json');
+  assert.equal(written.contents, '[{"id":"kept"}]\n');
+  assert.equal(written.options.mode, 0o600);
+});
 
 test('offline demo queue reloads persisted timers after worker module restart', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'fule-demo-jobs-'));

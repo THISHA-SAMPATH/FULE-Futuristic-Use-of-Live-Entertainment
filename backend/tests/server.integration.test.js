@@ -114,6 +114,7 @@ before(async () => {
       DATABASE_URL: '',
       REDIS_URL: '',
       TWITCH_CLIENT_ID: 'integration-client-id',
+      TWITCH_INTEGRATION_ENABLED: 'true',
       TWITCH_CLIENT_SECRET: 'integration-client-secret',
       TWITCH_REDIRECT_URI: `${origin}/auth/twitch/callback`,
       FULE_DEMO_GUARDIAN_INVITE: guardianInvite,
@@ -229,6 +230,29 @@ test('parallel guardian acknowledgement requests have exactly one winner', async
   const winner = left.status === 200 ? firstGuardian : secondGuardian;
   assert.equal(results[left.status === 200 ? 0 : 1].incident.acknowledged_by, winner.guardian_id);
   assert.match(results[left.status === 409 ? 0 : 1].error, /already acknowledged/i);
+});
+
+test('stream token route scopes access to the streamer session and rejects a closed incident', async () => {
+  const streamerId = `live-stream-${randomUUID()}`;
+  const createdResponse = await createSos(streamerId);
+  assert.equal(createdResponse.status, 201);
+  const created = await createdResponse.json();
+  const endpoint = `${origin}/api/incidents/${created.incident.incident_id}/stream-token`;
+  const unauthorized = await fetch(endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ streamer_id: streamerId }) });
+  assert.equal(unauthorized.status, 403);
+  const guardian = await verifyGuardian();
+  const unacceptedGuardian = await fetch(endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${guardian.access_token}` }, body: '{}' });
+  assert.equal(unacceptedGuardian.status, 403);
+  const tokenResponse = await fetch(endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Streamer-Evidence-Token': created.streamer_cancel_token }, body: JSON.stringify({ streamer_id: streamerId }) });
+  assert.equal(tokenResponse.status, 200);
+  const demoToken = await tokenResponse.json(); assert.equal(demoToken.mode, 'demo'); assert.equal(demoToken.can_publish, true);
+  const streamerSocket = socket(); await connected(streamerSocket);
+  const registered = once(streamerSocket, 'streamer_registered');
+  streamerSocket.emit('register_streamer', { incident_id: created.incident.incident_id, streamer_id: streamerId, cancel_token: created.streamer_cancel_token }); await registered;
+  const canceled = once(streamerSocket, 'streamer_action_confirmed'); streamerSocket.emit('cancel_sos', { incident_id: created.incident.incident_id }); await canceled;
+  const closed = await fetch(endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Streamer-Evidence-Token': created.streamer_cancel_token }, body: JSON.stringify({ streamer_id: streamerId }) });
+  assert.equal(closed.status, 409);
+  streamerSocket.disconnect();
 });
 
 test('central guardian authorization rejects expired access tokens with 401', async () => {

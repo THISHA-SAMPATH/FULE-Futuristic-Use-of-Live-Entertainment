@@ -17,7 +17,7 @@ import { incidentRepository, loadIncidents, getIncident as getStoredIncident, li
 import { createDispatchProvider, createEmergencyReport } from './services/dispatchBridge.js';
 import { createEscalationLadder } from './services/escalationLadder.js';
 import { notifyTrustedContacts } from './services/trustedContactNotifier.js';
-import { authenticateAccess, loginAccount, refreshAccount, registerAccount, requestGuardianApproval, approveGuardian } from './services/accountService.js';
+import { authenticateAccess, authenticateTrustedContactStreamToken, createTrustedContactStreamToken, loginAccount, refreshAccount, registerAccount, requestGuardianApproval, approveGuardian } from './services/accountService.js';
 import { redis, redisEnabled, installSocketAdapter, verifyRuntimeInfrastructure, scheduleEscalationJobs, cancelEscalationJobs, scheduleSafeWalkCheckin, scheduleSafeWalkTimeout, cancelSafeWalkJobs, startBackgroundWorkers, closeRuntimeInfrastructure } from './services/runtimeInfrastructure.js';
 import { activeSockets, alertDeliveryLatency, httpRequestDuration, httpRequests, log, metricsRegistry, queueDepth, requestContext } from './services/securityMetrics.js';
 import { twitchAccountStore } from './services/twitchAccountStore.js';
@@ -28,6 +28,7 @@ import { getWebPushPublicKey, sendSafeWalkPush } from './services/webPushNotifie
 import { createTieredRateLimiter } from './services/tieredRateLimiter.js';
 import { buildDegradedSnapshot } from './services/degradedModes.js';
 import { validateJsonValue } from './services/requestValidation.js';
+import { createLiveStreamService } from './services/liveStreamService.js';
 
 dotenv.config({ path: fileURLToPath(new URL('./.env', import.meta.url)) });
 
@@ -40,6 +41,7 @@ httpServer.maxRequestsPerSocket = 1_000;
 const port = Number(process.env.PORT) || 4000;
 const allowedOrigin = process.env.FRONTEND_ORIGIN || 'http://localhost:5173';
 const demoMode = process.env.DEMO_MODE === 'true';
+const twitchIntegrationEnabled = process.env.TWITCH_INTEGRATION_ENABLED === 'true';
 if (process.env.SENTRY_DSN) Sentry.init({
   dsn: process.env.SENTRY_DSN,
   environment: process.env.NODE_ENV || 'development',
@@ -178,7 +180,7 @@ app.use((req, res, next) => {
   if (req.secure || parsedAllowedOrigin.protocol === 'https:') res.set('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
   next();
 });
-app.use(express.json({ limit: '32kb', strict: true, type: 'application/json' }));
+app.use(express.json({ limit: '32kb', strict: true, type: 'application/json', verify(req, _res, buffer) { if (req.path === '/api/livekit/webhook') req.rawBody = buffer.toString('utf8'); } }));
 app.use((req, res, next) => {
   if (!req.is('application/json') || req.body == null) return next();
   const validation = validateJsonValue(req.body);
@@ -187,6 +189,7 @@ app.use((req, res, next) => {
 });
 
 const evidenceVault = new EvidenceVault({ directory: process.env.EVIDENCE_STORAGE_DIR || './data/evidence', store: safetyFeatureStore });
+const liveStreamService = createLiveStreamService({ evidenceVault, evidenceStore: safetyFeatureStore });
 
 function enforceRequestSafety(req, res, next) {
   const origin = req.get('Origin');
@@ -303,6 +306,8 @@ async function withDeadline(promise, timeoutMs, label) {
 async function getStreamerIdentity(req, suppliedId = '') {
   const user = await getTwitchUser(req);
   if (user?.id) return { id: user.id, user };
+  const account = authenticateAccess(getBearerToken(req));
+  if (account && ['user', 'guardian'].includes(account.role)) return { id: account.account_id, user: { id: account.account_id, display_name: 'FULE member', role: account.role } };
   if (demoMode && isLoopbackRequest(req) && typeof suppliedId === 'string' && suppliedId.trim()) return { id: suppliedId.trim().slice(0, 128), user: null };
   return null;
 }
@@ -403,6 +408,10 @@ async function changeIncidentAtomic(incidentId, patch, { event, actorId, details
   }
   if (!updated) return null;
   incidents.set(incidentId, updated);
+  if (['CANCELLED', 'FALSE_ALARM', 'RESOLVED'].includes(updated.status) || updated.dispatch_stage === 'STAND_DOWN') {
+    void liveStreamService.revokeIncident(incidentId).then(() => writeAudit({ event: 'LIVEKIT_ACCESS_REVOKED', incident_id: incidentId, actor_id: actorId || 'system', details: 'Incident closed; room participants and room access revoked.' }))
+      .catch((error) => log('error', 'livekit_revocation_failed', { incident_id: incidentId, taxonomy: 'dependency', error: error.message }));
+  }
   return updated;
 }
 
@@ -446,7 +455,14 @@ async function contactTrustedPeople(incidentId) {
   const contacts = await loadTrustedContactsFresh(current.streamer_id || '');
   let result = { status: 'SKIPPED', notified: [], error: null };
   if (contacts.length) {
-    try { result = await notifyTrustedContacts({ contacts, incident: current, demoMode }); }
+    try {
+      const streamLinks = {};
+      if (!demoMode) for (const contact of contacts) {
+        const token = createTrustedContactStreamToken({ incidentId, streamerId: current.streamer_id, phone: contact.phone });
+        streamLinks[contact.phone] = `${allowedOrigin}/?fuleIncident=${encodeURIComponent(incidentId)}#fuleStream=${encodeURIComponent(token)}`;
+      }
+      result = await notifyTrustedContacts({ contacts, incident: current, demoMode, streamLinks });
+    }
     catch (error) { result = { status: 'FAILED', notified: [], error: error.message }; }
   }
   const updated = await changeIncident(incidentId, {
@@ -727,7 +743,7 @@ async function markStreamerSafe(streamerId) {
 }
 
 const twitch = new TwitchIntegration({
-  clientId: process.env.TWITCH_CLIENT_ID, clientSecret: process.env.TWITCH_CLIENT_SECRET,
+  clientId: twitchIntegrationEnabled ? process.env.TWITCH_CLIENT_ID : '', clientSecret: twitchIntegrationEnabled ? process.env.TWITCH_CLIENT_SECRET : '',
   redirectUri: process.env.TWITCH_REDIRECT_URI || 'http://localhost:4000/auth/twitch/callback',
   rewardId: process.env.TWITCH_SILENT_SOS_REWARD_ID || '',
   rewardCost: process.env.TWITCH_SILENT_SOS_COST || 1,
@@ -839,7 +855,7 @@ app.get('/api/health', async (_req, res) => {
   }
   const snapshot = buildDegradedSnapshot({
     database, redis: redisStatus, ai: incidentAiHealth(),
-    twitch: !twitch.configured() ? 'unconfigured' : twitch.requestCircuit.snapshot().state === 'open' ? 'circuit_open' : 'available',
+    twitch: !twitchIntegrationEnabled ? 'disabled' : !twitch.configured() ? 'unconfigured' : twitch.requestCircuit.snapshot().state === 'open' ? 'circuit_open' : 'available',
     dispatch: dispatchProvider.name === 'SimulatedDispatch' ? 'simulated' : dispatchProvider.name === 'UnconfiguredDispatch' ? 'unconfigured' : 'available'
   });
   return res.json(snapshot);
@@ -900,6 +916,7 @@ app.post('/api/admin/guardians/:accountId/approve', async (req, res) => {
 });
 
 app.get('/auth/twitch', async (_req, res) => {
+  if (!twitchIntegrationEnabled) return res.status(404).send('Twitch integration is disabled. Set TWITCH_INTEGRATION_ENABLED=true to enable it.');
   if (!twitch.configured()) return res.status(503).send('Twitch OAuth is not configured. Set backend Twitch credentials.');
   const state = await twitch.createLoginState();
   res.cookie(oauthStateCookie, state, { httpOnly: true, sameSite: 'lax', secure: parsedAllowedOrigin.protocol === 'https:', maxAge: 10 * 60 * 1000, path: '/auth/twitch/callback' });
@@ -907,6 +924,7 @@ app.get('/auth/twitch', async (_req, res) => {
 });
 
 app.get('/auth/twitch/callback', async (req, res) => {
+  if (!twitchIntegrationEnabled) return res.status(404).send('Twitch integration is disabled.');
   const state = String(req.query.state || '');
   const validState = await twitch.consumeLoginState(state, getCookie(req, oauthStateCookie));
   res.clearCookie(oauthStateCookie, { httpOnly: true, sameSite: 'lax', secure: parsedAllowedOrigin.protocol === 'https:', path: '/auth/twitch/callback' });
@@ -922,7 +940,7 @@ app.get('/auth/twitch/callback', async (req, res) => {
 app.get('/api/twitch/session', requestLimit({ limit: Number(process.env.FULE_TWITCH_SESSION_LIMIT) || 60, windowMs: 60_000 }), async (req, res) => {
   const user = await getTwitchUser(req);
   const connection = user && twitch.connections.get(user.id);
-  return res.json({ user, eventsub_status: connection?.ready ? 'connected' : user ? 'connecting' : 'disconnected' });
+  return res.json({ user, integration_enabled: twitchIntegrationEnabled, eventsub_status: connection?.ready ? 'connected' : user ? 'connecting' : 'disconnected' });
 });
 app.post('/auth/twitch/logout', async (req, res) => {
   const parsed = String(req.headers.cookie || '').split(';').map((item) => item.trim()).find((item) => item.startsWith(`${sessionCookie}=`));
@@ -957,6 +975,8 @@ async function runRetentionCleanup() {
     await evidenceVault.removeStorageKeys(keys);
   }
   await cleanupIncidentData(retentionDays);
+  const deletedRecordings = await liveStreamService.pruneRecordings({ maxAgeDays: Number(process.env.LIVEKIT_RECORDING_RETENTION_DAYS) || 30 });
+  for (const recording of deletedRecordings) writeAudit({ event: 'LIVEKIT_RECORDING_EXPIRED', incident_id: recording.incident_id, actor_id: 'retention-worker', details: `evidence_sequence=${recording.evidence_sequence}` });
 }
 
 async function authorizeSafeWalk(req, walkId) {
@@ -1098,6 +1118,44 @@ app.post('/api/incidents/:incidentId/nearby-accept', async (req, res) => {
   return res.json({ accepted: true, accepted_count: accepted.count, incident });
 });
 
+app.post('/api/incidents/:incidentId/stream-token', requestLimit({ limit: 20, windowMs: 60_000 }), async (req, res) => {
+  const incident = await getIncident(String(req.params.incidentId));
+  if (!incident) return res.status(404).json({ error: 'Incident not found.' });
+  const guardian = getGuardian(req);
+  const trustedContact = authenticateTrustedContactStreamToken(getBearerToken(req), incident.incident_id, incident.streamer_id);
+  let role; let principal; let authorized = false;
+  if (guardian) {
+    const accepted = await safetyFeatureStore.guardianHasAcceptedOffer(incident.incident_id, guardian.guardian_id);
+    authorized = accepted || incident.acknowledged_by === guardian.guardian_id;
+    role = 'guardian'; principal = { id: guardian.guardian_id, name: guardian.display_name || 'Verified guardian' };
+  } else if (trustedContact) {
+    authorized = true; role = 'trusted_contact'; principal = trustedContact;
+  } else {
+    const identity = await getStreamerIdentity(req, req.body?.streamer_id);
+    const credentials = await loadCancelCredential(incident.incident_id);
+    const evidenceToken = req.get('X-Streamer-Evidence-Token');
+    authorized = Boolean(identity && credentials && identity.id === incident.streamer_id && credentials.streamer_id === identity.id && tokenMatches(evidenceToken, credentials.token_hash));
+    role = 'streamer'; principal = identity && { id: identity.id, name: identity.user?.display_name || 'Streamer' };
+  }
+  try {
+    const token = await liveStreamService.issueToken({ incident, principal, role, authorized });
+    writeAudit({ event: 'LIVEKIT_TOKEN_ISSUED', incident_id: incident.incident_id, actor_id: principal?.id || null, details: `role=${role}; expires=${token.expires_at}` });
+    return res.json(token);
+  } catch (error) { return res.status(error.status || 503).json({ error: error.message || 'Live stream is unavailable.' }); }
+});
+
+app.post('/api/livekit/webhook', async (req, res) => {
+  if (!req.rawBody) return res.status(400).json({ error: 'Signed LiveKit webhook body is required.' });
+  try {
+    const result = await liveStreamService.handleWebhook(req.rawBody, req.get('Authorization'));
+    if (result.handled) {
+      writeAudit({ event: 'LIVEKIT_RECORDING_HASHED', incident_id: result.incident_id, actor_id: 'livekit-egress', details: `sequence=${result.evidence.sequence}; sha256=${result.evidence.sha256}; chain_hash=${result.evidence.chain_hash}` });
+      io.to('guardians').emit('incident_evidence_added', { incident_id: result.incident_id, sequence: result.evidence.sequence, sha256: result.evidence.sha256, source: 'livekit_egress' });
+    }
+    return res.json({ received: true, handled: result.handled });
+  } catch (error) { log('error', 'livekit_webhook_rejected', { taxonomy: 'dependency', error: error.message }); return res.status(401).json({ error: 'LiveKit webhook verification or recording handling failed.' }); }
+});
+
 app.get('/api/incidents', requestLimit({ limit: 60, windowMs: 60_000 }), requireRoles('guardian', 'admin'), async (req, res) => {
   const guardian = req.guardianIdentity;
   const limit = req.query?.limit === undefined ? 100 : Number(req.query.limit);
@@ -1147,6 +1205,7 @@ app.get('/api/incidents/:incidentId/evidence/:chunkId', async (req, res) => {
   const entries = await safetyFeatureStore.listEvidence(incidentId);
   const entry = entries.find((item) => item.chunk_id === req.params.chunkId);
   if (!entry) return res.status(404).json({ error: 'Evidence chunk not found.' });
+  if (entries.some((item) => item.metadata?.source === 'retention_tombstone' && item.metadata.target_chunk_id === entry.chunk_id)) return res.status(410).json({ error: 'Recording expired under the evidence retention policy; its hash remains in the audit chain.' });
   const bytes = await evidenceVault.readChunk(entry);
   if (createHash('sha256').update(bytes).digest('hex') !== entry.sha256) return res.status(409).json({ error: 'Evidence integrity verification failed.' });
   res.type(entry.metadata?.content_type || 'application/octet-stream');
@@ -1205,8 +1264,9 @@ app.post('/api/dispatch/:incidentId/action', requestLimit({ limit: 60, windowMs:
 
 app.post('/api/sos', requestLimit({ limit: Number(process.env.FULE_SOS_IP_LIMIT) || 6, windowMs: 60_000 }), async (req, res) => {
   const user = await getTwitchUser(req);
+  const account = authenticateAccess(getBearerToken(req));
   const loadTestAuthorized = demoMode && Boolean(loadTestTokenHash) && tokenMatches(req.get('x-fule-load-test-token'), loadTestTokenHash);
-  const authenticatedStreamer = user && req.body?.streamer_id === user.id;
+  const authenticatedStreamer = (user && req.body?.streamer_id === user.id) || (account && ['user', 'guardian'].includes(account.role) && req.body?.streamer_id === account.account_id);
   if (!authenticatedStreamer && !loadTestAuthorized && !(demoMode && isLoopbackRequest(req))) return res.status(401).json({ error: 'Sign in with the matching Twitch streamer account to trigger SOS.' });
   const source = req.body?.source || 'button';
   if (source !== 'button' && !(demoMode && isLoopbackRequest(req))) return res.status(400).json({ error: 'Chat and redeem incidents must come from verified Twitch EventSub events.' });
@@ -1371,8 +1431,11 @@ await startBackgroundWorkers({
     if (incident) writeAudit({ event: 'SAFE_WALK_AUTO_SOS', incident_id: incident.incident?.incident_id || null, details: `${walkId}:${checkinNumber}` });
   }
 });
+const streamRetentionTimer = setInterval(() => { void runRetentionCleanup().catch((error) => log('error', 'retention_cleanup_failed', { taxonomy: 'dependency', error: error.message })); }, 60 * 60 * 1000);
+streamRetentionTimer.unref?.();
+void runRetentionCleanup().catch((error) => log('error', 'retention_cleanup_failed', { taxonomy: 'dependency', error: error.message }));
 await verifyRuntimeInfrastructure();
-await twitch.hydrate();
+if (twitchIntegrationEnabled) await twitch.hydrate();
 
 httpServer.listen(port, () => log('info', 'server_listening', { port, mode: demoMode ? 'demo' : 'production', storage: incidentRepository.db ? 'postgresql' : 'file-demo', redis: redisEnabled }));
 
@@ -1396,6 +1459,7 @@ async function gracefulShutdown(signal) {
   if (shuttingDown) return;
   shuttingDown = true;
   log('info', 'graceful_shutdown_started', { signal });
+  clearInterval(streamRetentionTimer);
   for (const incidentId of timers.keys()) clearIncidentTimers(incidentId);
   await flushIncidentWrites();
   await new Promise((resolve) => io.close(resolve));

@@ -102,6 +102,40 @@ To demonstrate alternate simulated sources, choose **!sos chat** or **Silent SOS
 
 For production configuration, CORS, OAuth redirect URI, PostgreSQL, Redis, health, metrics, scaling, and retention, see [DEPLOYMENT.md](DEPLOYMENT.md). `frontend/vercel.json` contains SPA fallback routing.
 
+## Private LiveKit SOS streaming
+
+Twitch is optional and disabled by default (`TWITCH_INTEGRATION_ENABLED=false`). FULE's incident stream uses LiveKit WebRTC, so a streamer can raise an SOS without a Twitch account. Demo mode draws a generated test pattern locally and needs no camera, LiveKit server, or network credentials; it is explicitly simulated and is not transmitted to a guardian.
+
+### LiveKit Cloud
+
+1. Create a LiveKit Cloud project and copy its WebSocket URL, API key, and API secret into `LIVEKIT_URL`, `LIVEKIT_API_KEY`, and `LIVEKIT_API_SECRET` in `backend/.env`. Keep the secret server-side.
+2. Set `DEMO_MODE=false` for the backend. For the frontend build, set `VITE_DEMO_MODE=false` and `VITE_API_URL` to the deployed API origin. Configure backend CORS with the exact frontend origin.
+3. Restart the backend and deploy/rebuild the frontend. A streamer signs in with a FULE account or Twitch, grants camera/microphone access, and starts an SOS. A verified guardian must accept the incident before receiving a subscribe-only token.
+4. For evidence recording, configure `LIVEKIT_WEBHOOK_URL` to the publicly reachable `https://<api-host>/api/livekit/webhook`, `LIVEKIT_EGRESS_S3_BUCKET`, AWS-compatible credentials, region, and optional S3 endpoint. LiveKit must be able to reach the webhook and bucket. Recording is optional; live alert and acknowledgement continue if egress is unavailable.
+5. Set `LIVEKIT_RECORDING_RETENTION_DAYS` to the approved retention period. The hourly cleanup deletes expired recording objects and appends a retention tombstone to the tamper-evident evidence chain.
+
+### Local self-hosted demo
+
+The optional compose overlay starts LiveKit, Egress, Redis, and MinIO alongside the app. In PowerShell, copy the env file as in Local quickstart, then run:
+
+```powershell
+docker compose -f docker-compose.yml -f docker-compose.livekit.yml up --build
+```
+
+The overlay contains development-only LiveKit and MinIO credentials; replace them before any network-accessible deployment. Use TLS/WSS, strong generated keys, firewall rules, and durable object storage outside local development. Check `docker-compose.livekit.yml` for the local ports. To return to the offline simulator, stop the overlay and leave `DEMO_MODE=true`.
+
+### Access, bandwidth, and cost
+
+Each incident gets a separate private room and opaque room name. Short-lived JWT grants are scoped to that room: the streamer can publish but cannot subscribe; verified guardians can subscribe only after accepting/being acknowledged; trusted contacts receive a time-limited, incident-bound viewer grant. Public clients never receive stream credentials. On incident close or stand-down, FULE removes room participants, revokes token timestamps, and deletes the room. This complements—not replaces—incident authorization and must be paired with HTTPS/WSS in deployment.
+
+Capture requests the rear camera at up to 480p with echo cancellation/noise suppression. Published video is capped at 400 kbit/s and 15 fps; room capacity defaults to 12 participants (`LIVEKIT_MAX_PARTICIPANTS`). Poor connection quality mutes video and keeps the alert/acknowledgement path available. Audio-only publishing is used when camera capture fails. Actual network usage varies with codec, audio, packet overhead, and the number of subscribers; each downstream viewer consumes additional egress bandwidth.
+
+LiveKit Cloud billing is usage-based and can include participant connection/data transfer and Egress recording minutes; S3 storage/requests and network transfer are separate costs. Self-hosting also requires compute for the SFU and a separate Egress service. Check the current [LiveKit pricing](https://livekit.com/pricing) and [billing model](https://docs.livekit.io/deploy/admin/billing/) before enabling recording or inviting real users. Configure budget alerts and a strict retention period. No cost is incurred by the local generated demo feed.
+
+### Stream trigger and safeguards
+
+The primary SOS starts the private room automatically. The installed PWA manifest includes a home-screen “Start emergency SOS” shortcut; supported mobile browsers can also enable the shake gesture from Settings after explicit motion permission. Twitch chat and channel point integration remain separate and are disabled unless `TWITCH_INTEGRATION_ENABLED=true`. Never present a simulated feed or dispatch action as a real emergency service connection.
+
 ## Run tests and build
 
 ```powershell

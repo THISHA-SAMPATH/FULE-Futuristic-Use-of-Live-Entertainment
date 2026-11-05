@@ -1,5 +1,5 @@
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
-import { open, readFile, stat, unlink } from 'node:fs/promises';
+import { existsSync, mkdirSync, readFileSync } from 'node:fs';
+import { open, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -9,6 +9,48 @@ const lockPath = `${path}.lock`;
 let polling;
 let handlers;
 let writes = Promise.resolve();
+
+const sleep = (delay) => new Promise((resolveDelay) => setTimeout(resolveDelay, delay));
+
+// Windows sync clients (including OneDrive) can briefly hold the destination
+// while scanning a replacement. Retry those sharing violations before failing
+// the durable queue update.
+export async function renameWithRetry(source, destination, {
+  renameFile = rename,
+  wait = sleep,
+  retries = 12,
+  initialDelayMs = 40,
+  maxDelayMs = 1_000
+} = {}) {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      await renameFile(source, destination);
+      return;
+    } catch (error) {
+      const transientLock = ['EPERM', 'EACCES', 'EBUSY'].includes(error.code);
+      if (!transientLock || attempt >= retries) throw error;
+      await wait(Math.min(maxDelayMs, initialDelayMs * (2 ** attempt)));
+    }
+  }
+}
+
+export async function replaceQueueFile(source, destination, contents, {
+  platform = process.platform,
+  renameFile = rename,
+  wait = sleep,
+  writeDestination = writeFile
+} = {}) {
+  try {
+    await renameWithRetry(source, destination, { renameFile, wait, retries: 7 });
+  } catch (error) {
+    // OneDrive/antivirus may hold an existing destination without delete
+    // sharing. The queue's cross-process lock makes an in-place Windows write
+    // safe from competing FULE workers, while the temp file remains available
+    // until the write has completed.
+    if (platform !== 'win32' || !['EPERM', 'EACCES', 'EBUSY'].includes(error.code)) throw error;
+    await writeDestination(destination, contents, { mode: 0o600 });
+  }
+}
 
 function reportQueueError(error) {
   console.error(JSON.stringify({ timestamp: new Date().toISOString(), level: 'error', message: 'demo_job_queue_failed', error: error.message }));
@@ -53,16 +95,17 @@ async function withFileLock(operation) {
 }
 
 function update(operation) {
-  const task = writes.catch(() => {}).then(() => withFileLock(() => {
+  const task = writes.catch(() => {}).then(() => withFileLock(async () => {
     const jobs = readJobs();
     const result = operation(jobs);
     const temporary = `${path}.${process.pid}.${randomUUID()}.tmp`;
+    const contents = `${JSON.stringify(jobs)}\n`;
     try {
-      writeFileSync(temporary, `${JSON.stringify(jobs)}\n`, { mode: 0o600 });
-      renameSync(temporary, path);
+      await writeFile(temporary, contents, { mode: 0o600 });
+      await replaceQueueFile(temporary, path, contents);
       return result;
     } finally {
-      if (existsSync(temporary)) unlink(temporary).catch(reportQueueError);
+      try { await unlink(temporary); } catch (error) { if (error.code !== 'ENOENT') reportQueueError(error); }
     }
   }));
   writes = task.catch(() => {});

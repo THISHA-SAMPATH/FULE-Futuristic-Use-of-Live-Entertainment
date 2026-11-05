@@ -45,6 +45,20 @@ export function authenticateAccess(token) {
   try { const payload = jwt.verify(String(token || ''), secret, { issuer: 'fule' }); return { account_id: payload.sub, role: payload.role }; }
   catch { return null; }
 }
+
+export function createTrustedContactStreamToken({ incidentId, streamerId, phone }) {
+  const phoneHash = hashToken(String(phone || ''));
+  return jwt.sign({ sub: `trusted-${phoneHash.slice(0, 20)}`, role: 'trusted_contact', incident_id: incidentId, streamer_id: streamerId, phone_hash: phoneHash }, secret, { expiresIn: '10m', issuer: 'fule' });
+}
+
+export function authenticateTrustedContactStreamToken(token, incidentId, streamerId) {
+  try {
+    const payload = jwt.verify(String(token || ''), secret, { issuer: 'fule' });
+    return payload.role === 'trusted_contact' && payload.incident_id === incidentId && payload.streamer_id === streamerId && typeof payload.phone_hash === 'string'
+      ? { id: payload.sub, role: payload.role }
+      : null;
+  } catch { return null; }
+}
 export async function requestGuardianApproval(accountId) {
   if (!db) throw new Error('Account persistence requires PostgreSQL.');
   return db('accounts').where({ account_id: accountId, role: 'user' }).update({ role: 'guardian_pending' });

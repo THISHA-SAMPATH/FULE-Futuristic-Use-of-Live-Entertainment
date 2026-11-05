@@ -22,7 +22,7 @@ test('demo SOS uses synthetic identity and coordinates without Twitch or geoloca
     source: 'redeem',
     transcript: 'Synthetic scenario transcript',
     fetchImpl: async (url, options) => {
-      calls.push({ url, body: JSON.parse(options.body) });
+      calls.push({ url, body: JSON.parse(options.body), headers: options.headers });
       return { ok: true, json: async () => ({ incident: { incident_id: 'demo-test', status: 'PENDING_DISPATCH' }, streamer_cancel_token: 'cancel-token' }) };
     }
   });
@@ -33,6 +33,7 @@ test('demo SOS uses synthetic identity and coordinates without Twitch or geoloca
   assert.deepEqual(calls[0].body.location, DEMO_LOCATION);
   assert.equal(calls[0].body.source, 'redeem');
   assert.equal(calls[0].body.audio_transcript_snippet, 'Synthetic scenario transcript');
+  assert.match(calls[0].headers['Idempotency-Key'], /^[\w:.-]{8,180}$/);
   assert.equal(result.streamer.login, 'Demo Streamer');
 });
 
@@ -42,6 +43,6 @@ test('production mode checks Twitch login before requesting geolocation', async 
     demoMode: false, user: null, apiUrl: 'http://localhost:4000',
     geolocation: { getCurrentPosition() { geolocationRead = true; } },
     fetchImpl: async () => { throw new Error('fetch must not run'); }
-  }), { code: 'TWITCH_LOGIN_REQUIRED', message: 'Connect your Twitch account before starting SOS.' });
+  }), { code: 'TWITCH_LOGIN_REQUIRED', message: 'Sign in with a FULE account or connect Twitch before starting SOS.' });
   assert.equal(geolocationRead, false);
 });

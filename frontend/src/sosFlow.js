@@ -24,11 +24,12 @@ export async function submitSos({
   geolocation = globalThis.navigator?.geolocation,
   fetchImpl = fetch,
   apiUrl,
+  accessToken = '',
   source = 'button',
   transcript = ''
 }) {
   if (!demoMode && !user) {
-    const error = new Error('Connect your Twitch account before starting SOS.');
+    const error = new Error('Sign in with a FULE account or connect Twitch before starting SOS.');
     error.code = 'TWITCH_LOGIN_REQUIRED';
     throw error;
   }
@@ -38,14 +39,14 @@ export async function submitSos({
 
   if (!demoMode) {
     const locationResponse = await fetchImpl(`${apiUrl}/api/streamer/location`, {
-      method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' },
+      method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json', ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}) },
       body: JSON.stringify({ location })
     });
     if (!locationResponse.ok) throw new Error('Secure location update failed.');
   }
 
   const response = await fetchImpl(`${apiUrl}/api/sos`, {
-    method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' },
+    method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json', 'Idempotency-Key': globalThis.crypto?.randomUUID?.() || `fule-${Date.now()}-${Math.random().toString(36).slice(2)}`, ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}) },
     body: JSON.stringify({
       streamer_id: streamer.id,
       location,
