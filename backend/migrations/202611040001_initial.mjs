@@ -34,26 +34,10 @@ export async function up(knex) {
     table.string('account_id', 160).primary();
     table.string('email', 320).notNullable().unique();
     table.string('password_hash', 255).nullable();
-    table.string('oauth_provider', 40).nullable();
-    table.string('oauth_subject', 200).nullable().unique();
     table.string('role', 24).notNullable().defaultTo('user');
     table.boolean('guardian_approved').notNullable().defaultTo(false);
     table.integer('auth_version').notNullable().defaultTo(0);
     table.timestamp('created_at', { useTz: true }).notNullable().defaultTo(knex.fn.now());
-  });
-  await knex.schema.createTable('twitch_accounts', (table) => {
-    table.string('streamer_id', 160).primary();
-    table.string('login', 100).notNullable();
-    table.string('display_name', 160).notNullable();
-    table.text('avatar_url').nullable();
-    table.text('token_ciphertext').notNullable();
-    table.string('token_iv', 48).notNullable();
-    table.string('token_tag', 48).notNullable();
-    table.timestamp('token_expires_at', { useTz: true }).notNullable();
-    table.jsonb('scopes').notNullable().defaultTo(knex.raw("'[]'::jsonb"));
-    table.string('reward_id', 160).nullable();
-    table.integer('auth_version').notNullable().defaultTo(0);
-    table.timestamp('updated_at', { useTz: true }).notNullable().defaultTo(knex.fn.now());
   });
   await knex.schema.createTable('refresh_tokens', (table) => {
     table.string('token_hash', 64).primary();
@@ -82,7 +66,6 @@ export async function down(knex) {
   await knex.schema.dropTableIfExists('refresh_tokens');
   await knex.schema.dropTableIfExists('idempotency_keys');
   await knex.schema.dropTableIfExists('streamer_incident_sessions');
-  await knex.schema.dropTableIfExists('twitch_accounts');
   await knex.schema.dropTableIfExists('accounts');
   await knex.schema.dropTableIfExists('audit_events');
   await knex.schema.dropTableIfExists('false_alarm_counts');

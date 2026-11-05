@@ -11,4 +11,4 @@ COPY shared /app/shared
 RUN mkdir -p /app/backend/data && chown -R node:node /app/backend/data
 USER node
 EXPOSE 4000
-CMD ["node", "server.js"]
+CMD ["sh", "-c", "npm run migrate:latest && node server.js"]

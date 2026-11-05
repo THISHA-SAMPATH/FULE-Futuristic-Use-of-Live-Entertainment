@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { io } from 'socket.io-client';
-import { Activity, ArrowUpRight, Check, Clock3, LoaderCircle, MapPin, Radio, ShieldCheck, TriangleAlert } from 'lucide-react';
+import { Activity, Check, Clock3, LoaderCircle, MapPin, Radio, ShieldCheck, TriangleAlert } from 'lucide-react';
 import { isIncident } from '../../../shared/incident.mjs';
 import { API_URL } from '../config.js';
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
@@ -18,14 +18,12 @@ function escalationSeconds(date, now) {
   return Math.max(0, Math.ceil((Date.parse(date) + 30_000 - now) / 1000));
 }
 
-export default function GuardianDashboard({ search = '', onIncidentsChange, onRoleChange, onStatus, demoMode = false, demoAlerts = [] }) {
+export default function GuardianDashboard({ search = '', onIncidentsChange, onRoleChange, onStatus, demoMode = false, demoAlerts = [], account = null }) {
   const reduceMotion = useReducedMotion();
   const [alerts, setAlerts] = useState([]);
   const [connection, setConnection] = useState('connecting');
   const [role, setRole] = useState('public');
-  const [guardianToken, setGuardianToken] = useState(() => sessionStorage.getItem('fuleGuardianToken') || '');
-  const [tokenDraft, setTokenDraft] = useState('');
-  const [showTokenForm, setShowTokenForm] = useState(false);
+  const guardianToken = account?.access_token || '';
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
   const [ackPending, setAckPending] = useState({});
@@ -42,18 +40,16 @@ export default function GuardianDashboard({ search = '', onIncidentsChange, onRo
   const accessRole = (next) => { roleRef.current = next; setRole(next); onRoleChange?.(next); };
 
   useEffect(() => {
-    const socket = io(API_URL, { transports: ['websocket', 'polling'], auth: { guardianToken } }); socketRef.current = socket;
+    const socket = io(API_URL, { transports: ['websocket', 'polling'], auth: { accessToken: guardianToken } }); socketRef.current = socket;
     socket.on('connect', () => { connectionState('online'); setLoadError(''); });
     socket.on('disconnect', () => connectionState('offline'));
     socket.on('connect_error', (error) => {
       connectionState('offline');
       if (demoMode) setLoading(false);
-      if (guardianToken && error.message?.includes('Guardian session')) {
-        sessionStorage.removeItem('fuleGuardianToken');
+      if (guardianToken && error.message?.includes('session')) {
         accessRole('public');
-        setGuardianToken('');
         setLoading(false);
-        setLoadError('Guardian session expired. Verify your invite again.');
+        setLoadError('Your FULE session expired. Sign in again.');
       } else setLoadError('Live alert connection failed. Reconnecting…');
     });
     socket.on('fule:access', ({ role: nextRole, guardian_id }) => {
@@ -75,7 +71,7 @@ export default function GuardianDashboard({ search = '', onIncidentsChange, onRo
     socket.on('nearby_sos_offer', (offer) => setNearbyOffers((current) => [offer, ...current.filter((item) => item.incident_id !== offer.incident_id)]));
     socket.on('guardian_accept_required', () => setLoadError('Accept the nearby response request before acknowledging or opening exact details.'));
     socket.on('incident:public', (incident) => { if (roleRef.current !== 'guardian') upsert(incident); });
-    for (const event of ['incident_acknowledged', 'incident_dispatch_ready', 'incident_escalated', 'incident_updated', 'sos_cancelled', 'incident_clip_ready', 'dispatch_queued', 'dispatch_sent', 'dispatch_acknowledged', 'dispatch_status_updated']) socket.on(event, upsert);
+    for (const event of ['incident_acknowledged', 'incident_dispatch_ready', 'incident_escalated', 'incident_updated', 'sos_cancelled', 'dispatch_queued', 'dispatch_sent', 'dispatch_acknowledged', 'dispatch_status_updated']) socket.on(event, upsert);
     socket.on('incident:public:update', (update) => publishAlerts((current) => current.map((item) => item.incident_id === update.incident_id ? { ...item, ...update } : item)));
     socket.on('trusted_contacts_notified', (update) => publishAlerts((current) => current.map((item) => item.incident_id === update.incident_id ? { ...item, contacts_notified_at: new Date().toISOString(), dispatch_stage: 'CONTACTS' } : item)));
     const tick = window.setInterval(() => setNow(Date.now()), 1000);
@@ -98,13 +94,14 @@ export default function GuardianDashboard({ search = '', onIncidentsChange, onRo
     return allAlerts.filter((alert) => [alert.summary, alert.module, alert.location?.address, alert.status, alert.threat_level].some((value) => String(value || '').toLowerCase().includes(query)));
   }, [alerts, demoAlerts, demoStatuses, search]);
 
-  async function connectGuardian(event) {
-    event.preventDefault(); const invite = tokenDraft.trim(); if (!invite) return;
+  async function requestGuardianVerification() {
+    if (!guardianToken || account?.role !== 'user') return;
     setLoadError('');
     try {
-      const response = await fetch(`${API_URL}/api/guardians/verify`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ invite_code: invite }) });
-      const result = await response.json(); if (!response.ok) throw new Error(result.error || 'Guardian verification failed.');
-      sessionStorage.setItem('fuleGuardianToken', result.access_token); setGuardianToken(result.access_token); setShowTokenForm(false); setTokenDraft(''); setLoading(true);
+      const response = await fetch(`${API_URL}/api/auth/guardian-request`, { method: 'POST', headers: { Authorization: `Bearer ${guardianToken}` } });
+      const result = await response.json(); if (!response.ok) throw new Error(result.error || 'Could not request guardian verification.');
+      accessRole('guardian_pending');
+      setLoadError(result.requested ? 'Guardian verification request sent to an administrator.' : 'Your account already has a guardian request in review.');
     } catch (error) { setLoadError(error.message); }
   }
 
@@ -117,10 +114,6 @@ export default function GuardianDashboard({ search = '', onIncidentsChange, onRo
     setAckPending((current) => ({ ...current, [alert.incident_id]: true }));
     socketRef.current?.emit('acknowledge_incident', alert.incident_id);
     window.setTimeout(() => setAckPending((current) => current[alert.incident_id] ? ({ ...current, [alert.incident_id]: false }) : current), 5000);
-  }
-
-  function disconnectGuardian() {
-    sessionStorage.removeItem('fuleGuardianToken'); setGuardianToken(''); accessRole('public'); publishAlerts([]); setAckPending({}); setLoadError('');
   }
 
   async function standDown(alert) {
@@ -177,8 +170,9 @@ export default function GuardianDashboard({ search = '', onIncidentsChange, onRo
   return <aside className="guardian-panel" id="alerts" aria-label="Guardian alert panel">
     <div className="guardian-panel-header" id="logs"><div><p className="eyebrow"><Radio size={13}/> GUARDIAN NETWORK</p><h2>{role === 'guardian' ? 'Incident history' : 'Emergency alerts'}</h2></div><span className={`guardian-connection ${connection}`}><i/>{connection === 'online' ? 'LIVE' : connection === 'offline' ? 'OFFLINE' : 'CONNECTING'}</span></div>
     {role !== 'guardian' && <div className="guardian-access"><ShieldCheck size={15}/><span>Public feed · private details require verification</span></div>}
-    {role !== 'guardian' && <div className="guardian-auth">{showTokenForm ? <form className="guardian-auth-form" onSubmit={connectGuardian}><label className="visually-hidden" htmlFor="guardian-invite">Guardian invite code</label><input id="guardian-invite" type="password" value={tokenDraft} onChange={(event) => setTokenDraft(event.target.value)} placeholder="Guardian invite code" autoComplete="current-password"/><button type="submit">VERIFY</button></form> : <button className="guardian-auth-button" onClick={() => setShowTokenForm(true)}>Verify as guardian</button>}</div>}
-    {role === 'guardian' && <button className="guardian-logout" onClick={disconnectGuardian}>Disconnect guardian access</button>}
+    {role === 'user' && <div className="guardian-auth"><button className="guardian-auth-button" onClick={requestGuardianVerification}>Request guardian verification</button></div>}
+    {role === 'guardian_pending' && <div className="guardian-access"><ShieldCheck size={15}/><span>Your guardian request is awaiting administrator approval.</span></div>}
+    {role === 'public' && !account && <div className="guardian-access"><ShieldCheck size={15}/><span>Sign in with a FULE account to request verified guardian access.</span></div>}
     {role === 'guardian' && <div className="guardian-duty-control"><span><strong>Nearby response</strong><small>{dutyStatus === 'on' ? 'On duty · neighborhood shared' : 'Off duty · location not shared'}</small></span><button type="button" onClick={toggleDuty} disabled={dutyStatus === 'requesting'}>{dutyStatus === 'on' ? 'Go off duty' : dutyStatus === 'requesting' ? 'Locating…' : 'Go on duty'}</button><p>Observe, call for help, assist when safe. Never confront.</p></div>}
     <div className="alerts-overview"><span className="overview-mark"><Activity size={17}/></span><span><strong>{activeCount} active {activeCount === 1 ? 'alert' : 'alerts'}</strong><small>{role === 'guardian' ? 'Guardian only incident details' : 'Anonymized safety notices'}</small></span></div>
     {role === 'guardian' && nearbyOffers.length > 0 && <section className="nearby-offers" aria-label="Nearby responder offers"><h3>Nearby response requests</h3>{nearbyOffers.map((offer) => <article key={offer.incident_id}><strong>{offer.threat_level} · {offer.approximate_area}</strong><p>{offer.guidance}</p><button type="button" onClick={() => acceptNearby(offer)}>Accept · reveal exact location</button></article>)}</section>}
@@ -205,7 +199,7 @@ export default function GuardianDashboard({ search = '', onIncidentsChange, onRo
               {activeStatus && <div className="escalation-countdown" style={{ '--escalation-progress': `${Math.min(100, countdown / 60 * 100)}%` }} role="timer" aria-label={countdown ? `Escalation in ${countdown} seconds` : 'Escalation is due'}><span><Clock3 size={13}/>Escalation</span><strong>{countdown ? `00:${String(countdown).padStart(2, '0')}` : 'Due'}</strong></div>}
               <DispatchTimeline incident={alert}/>
               <OperatorBrief incident={alert} compact privateLocation={role === 'guardian'}/>
-              <div className="alert-meta"><span>{alert.source.toUpperCase()} · {alert.status.replaceAll('_', ' ')}</span>{alert.clip_url && <a href={alert.clip_url} target="_blank" rel="noreferrer" aria-label="Open clip evidence">CLIP EVIDENCE <ArrowUpRight size={12}/></a>}{role === 'guardian' && !alert.demo && <button type="button" onClick={() => downloadCaseFile(alert)}>CASE FILE</button>}</div>
+              <div className="alert-meta"><span>{alert.source.toUpperCase()} · {alert.status.replaceAll('_', ' ')}</span>{role === 'guardian' && !alert.demo && <button type="button" onClick={() => downloadCaseFile(alert)}>CASE FILE</button>}</div>
               {alert.escalated && <p className="alert-escalation-note">{alert.escalation_flag}</p>}
               {role === 'guardian' && ['SENT', 'ACKNOWLEDGED'].includes(alert.dispatch_record?.status) && alert.dispatch_stage !== 'STAND_DOWN' && <button className="stand-down-button" onClick={() => standDown(alert)}>STAND DOWN DISPATCH</button>}
               <button className={`acknowledge-button ${acknowledged ? 'acknowledged' : ''}`} onClick={() => acknowledge(alert)} disabled={acknowledged || (!alert.demo && role !== 'guardian') || Boolean(ackPending[alert.incident_id]) || nearbyOffers.some((offer) => offer.incident_id === alert.incident_id)} aria-label={acknowledged ? 'Incident acknowledged' : `Acknowledge and dispatch incident ${alert.incident_id}`}>

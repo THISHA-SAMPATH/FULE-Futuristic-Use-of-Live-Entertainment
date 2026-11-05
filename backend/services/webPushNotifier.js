@@ -28,3 +28,21 @@ export async function sendSafeWalkPush(streamerId, { event, countdown_seconds: c
   }));
   return { sent, configured: true };
 }
+
+export async function sendTrustedContactPush(accountId, { incident_id, threat_level, summary, url }) {
+  if (!configure()) return false;
+  const subscriptions = await safetyFeatureStore.loadPushSubscriptions(accountId);
+  await Promise.all(subscriptions.map(async (subscription) => {
+    try {
+      await webpush.sendNotification(subscription, JSON.stringify({
+        title: `${threat_level} FULE safety alert`,
+        body: 'Someone in your trusted circle needs a check-in.',
+        url: url || `/?incident=${encodeURIComponent(incident_id)}`
+      }), { TTL: 300, urgency: 'high' });
+    } catch (error) {
+      if (error.statusCode === 404 || error.statusCode === 410) await safetyFeatureStore.removePushSubscription(accountId, subscription.endpoint);
+      else log('error', 'trusted_contact_push_failed', { error: error.message, status: error.statusCode || null });
+    }
+  }));
+  return subscriptions.length > 0;
+}

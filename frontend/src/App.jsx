@@ -30,18 +30,17 @@ export default function App() {
   const [category, setCategory] = useState('Women’s Safety');
   const [sending, setSending] = useState(false);
   const [error, setError] = useState('');
-  const [twitchUser, setTwitchUser] = useState(null);
-  const [twitchEnabled, setTwitchEnabled] = useState(false);
   const [fuleAccount, setFuleAccount] = useState(() => {
     try { const saved = JSON.parse(sessionStorage.getItem('fuleAccount') || 'null'); const accessToken = sessionStorage.getItem('fuleAccessToken'); return saved && accessToken ? { ...saved, access_token: accessToken } : null; }
     catch { return null; }
   });
-  const streamUser = twitchUser || fuleAccount;
+  const streamUser = fuleAccount ? { ...fuleAccount, id: fuleAccount.account_id, display_name: fuleAccount.email } : null;
   const [activeIncident, setActiveIncident] = useState(null);
   const [socketStatus, setSocketStatus] = useState('connecting');
   const [role, setRole] = useState('public');
   const [incidents, setIncidents] = useState([]);
   const [remaining, setRemaining] = useState(0);
+  const [riskLevel, setRiskLevel] = useState('standard');
   const [alarmEnabled, setAlarmEnabled] = useState(false);
   const [alertsOpen, setAlertsOpen] = useState(false);
   const [nearbyAccepted, setNearbyAccepted] = useState(0);
@@ -58,13 +57,29 @@ export default function App() {
   );
 
   useEffect(() => {
+    if (!fuleAccount) return undefined;
     let live = true;
-    fetch(`${API_URL}/api/twitch/session`, { credentials: 'include' }).then(async (response) => {
-      if (!response.ok) throw new Error('Could not load Twitch session.');
-      return response.json();
-    }).then((data) => { if (live) { setTwitchUser(data.user || null); setTwitchEnabled(Boolean(data.integration_enabled)); } }).catch((fetchError) => { if (live && !DEMO_MODE) setError(fetchError.message); });
-    return () => { live = false; };
-  }, []);
+    const refresh = async () => {
+      const refreshToken = sessionStorage.getItem('fuleRefreshToken');
+      if (!refreshToken) return;
+      try {
+        const response = await fetch(`${API_URL}/api/auth/refresh`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ refresh_token: refreshToken }) });
+        if (!response.ok) throw new Error('Session expired. Sign in again.');
+        const result = await response.json();
+        if (!live) return;
+        sessionStorage.setItem('fuleAccessToken', result.access_token);
+        sessionStorage.setItem('fuleRefreshToken', result.refresh_token);
+        setFuleAccount({ ...result.account, access_token: result.access_token });
+      } catch (refreshError) {
+        if (!live) return;
+        sessionStorage.removeItem('fuleAccessToken'); sessionStorage.removeItem('fuleRefreshToken'); sessionStorage.removeItem('fuleAccount');
+        setFuleAccount(null); setError(refreshError.message);
+      }
+    };
+    void refresh();
+    const timer = window.setInterval(refresh, 8 * 60_000);
+    return () => { live = false; window.clearInterval(timer); };
+  }, [Boolean(fuleAccount?.account_id)]);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -84,7 +99,7 @@ export default function App() {
   const startAlarm = useLoudAlarm(Boolean(active), alarmEnabled);
 
   const registerStreamerIncident = useCallback((result) => {
-    const socket = io(API_URL, { transports: ['websocket', 'polling'] }); streamerSocketRef.current?.disconnect(); streamerSocketRef.current = socket;
+    const socket = io(API_URL, { transports: ['websocket', 'polling'], auth: { accessToken: fuleAccount?.access_token || '' } }); streamerSocketRef.current?.disconnect(); streamerSocketRef.current = socket;
     socket.on('connect', () => socket.emit('register_streamer', { incident_id: result.incident.incident_id, streamer_id: result.streamer?.id || streamUser?.id || 'demo-streamer', cancel_token: result.streamer_cancel_token }));
     socket.on('streamer_action_confirmed', ({ status }) => setActiveIncident((current) => current ? { ...current, status } : current));
     socket.on('streamer_action_rejected', ({ reason }) => setError(reason || 'The cancel window has ended.'));
@@ -100,7 +115,7 @@ export default function App() {
     setActiveIncident(result.incident);
     setStreamRequested(true);
     setAlertsOpen(true);
-  }, [streamUser]);
+  }, [streamUser, fuleAccount?.access_token]);
 
   const handleSafeWalkEmergency = useCallback((incident, cancelToken) => {
     registerStreamerIncident({ incident, streamer: streamUser || { id: 'demo-streamer' }, streamer_cancel_token: cancelToken });
@@ -113,8 +128,8 @@ export default function App() {
     setError(''); setSending(true);
     startAlarm();
     try {
-      const pipelineSource = ['shake', 'shortcut'].includes(source) ? 'button' : source;
-      const result = await submitSos({ demoMode: DEMO_MODE, user: streamUser, accessToken: fuleAccount?.access_token || '', apiUrl: API_URL, source: pipelineSource, transcript });
+      const pipelineSource = source === 'shortcut' ? 'keyboard' : source;
+      const result = await submitSos({ demoMode: DEMO_MODE, user: streamUser, accessToken: fuleAccount?.access_token || '', apiUrl: API_URL, source: pipelineSource, transcript, riskLevel });
       registerStreamerIncident(result);
     } catch (requestError) { setError(requestError.message || 'SOS could not be sent.'); }
     finally { setSending(false); }
@@ -184,10 +199,7 @@ export default function App() {
   function joinAsGuardian() {
     document.getElementById('alerts')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
     window.setTimeout(() => {
-      const invite = document.getElementById('guardian-invite');
-      if (invite) invite.focus();
-      else document.querySelector('.guardian-auth-button')?.click();
-      window.setTimeout(() => document.getElementById('guardian-invite')?.focus(), 80);
+      document.querySelector('.guardian-auth-button')?.focus();
     }, 350);
   }
 
@@ -208,18 +220,18 @@ export default function App() {
 
   const carouselStreams = DEMO_MODE ? DEMO_STREAMS : featuredStream ? [featuredStream] : [];
   return <div className="fule-shell gamey-shell" id="home" data-theme={active ? 'alert' : 'calm'}>
-    <Header search={search} onSearch={setSearch} onTrigger={triggerSos} onOpenAlerts={() => setAlertsOpen(true)} alertsOpen={alertsOpen} sending={sending} active={Boolean(active)} user={twitchUser} account={fuleAccount} twitchEnabled={twitchEnabled} unreadCount={activeCount} demoMode={DEMO_MODE} category={category} onCategorySelect={setCategory}/>
+    <Header search={search} onSearch={setSearch} onTrigger={triggerSos} onOpenAlerts={() => setAlertsOpen(true)} alertsOpen={alertsOpen} sending={sending} active={Boolean(active)} account={fuleAccount} unreadCount={activeCount} demoMode={DEMO_MODE} category={category} onCategorySelect={setCategory}/>
     <Sidebar connection={socketStatus} role={role} demoMode={DEMO_MODE} unreadCount={activeCount} incidents={[...incidents, ...demoAlerts, ...(activeIncident ? [activeIncident] : [])]} onTrigger={triggerSos} sending={sending} active={Boolean(active)} onOpenAlerts={() => setAlertsOpen(true)} onOpenInsights={() => { const drawer = document.querySelector('.insights-drawer'); if (drawer) { drawer.open = true; drawer.scrollIntoView({ behavior: 'smooth', block: 'center' }); } }}/>
     <main className="dashboard-content">
-      <div className="connection-strip">{!DEMO_MODE && <span className="connection-state"><i className={socketStatus === 'online' ? 'on' : ''}/>{socketStatus === 'online' ? 'Safety network is connected' : socketStatus === 'offline' ? 'Reconnecting to the safety network' : 'Connecting to the safety network'}</span>}<span className="privacy-note"><Shield size={13}/>Precise location is shared only with verified guardians</span>{!DEMO_MODE && !twitchUser && <StandaloneAccount account={fuleAccount} onAccount={setFuleAccount}/>}</div>
+      <div className="connection-strip">{!DEMO_MODE && <span className="connection-state"><i className={socketStatus === 'online' ? 'on' : ''}/>{socketStatus === 'online' ? 'Safety network is connected' : socketStatus === 'offline' ? 'Reconnecting to the safety network' : 'Connecting to the safety network'}</span>}<span className="privacy-note"><Shield size={13}/>Precise location is shared only with verified guardians</span>{!DEMO_MODE && <StandaloneAccount account={fuleAccount} onAccount={setFuleAccount}/>}</div>
       {trustedStreamAccess && <section className="active-response-card trusted-stream-entry"><h2>Private stream shared with you</h2><p>This incident stream link is limited to the invited trusted contact and expires shortly.</p><IncidentLiveStream incident={{ incident_id: trustedStreamAccess.incidentId, status: 'PENDING_DISPATCH' }} streamerId="" streamerToken="" role="trusted_contact" guardianToken={trustedStreamAccess.token} compact/></section>}
-      {error && <div className="global-error" role="alert"><AlertTriangle size={16}/><span>{error}</span>{error.includes('connect Twitch') && twitchEnabled && <a href={`${API_URL}/auth/twitch`}>Connect Twitch</a>}<button onClick={() => setError('')} aria-label="Dismiss error">×</button></div>}
+      {error && <div className="global-error" role="alert"><AlertTriangle size={16}/><span>{error}</span><button onClick={() => setError('')} aria-label="Dismiss error">×</button></div>}
       <div className="main-dashboard-grid gamey-grid"><div className="feed-column gamey-feed">
         <Hero active={Boolean(active)} featuredStream={featuredStream} carouselStreams={carouselStreams} demoMode={DEMO_MODE} onOpenAlerts={() => setAlertsOpen(true)} onSetUpCircle={setUpSafeCircle}/>
         <section className="active-response-card" hidden={!activeIncident}><div className="active-response-heading"><span>Live response</span><strong>{activeIncident?.dispatch_record?.status || 'Guardians alerted'}</strong></div><p className="nearby-response-count" aria-live="polite">{nearbyAccepted} nearby {nearbyAccepted === 1 ? 'guardian is' : 'guardians are'} coming</p><IncidentLiveStream ref={liveStreamRef} incident={activeIncident} streamerId={activeIncident?.streamer_id || streamUser?.id || 'demo-streamer'} streamerToken={evidenceToken} accountAccessToken={fuleAccount?.access_token || ''} role="streamer" autoStart={streamRequested}/>{activeIncident && <><DispatchTimeline incident={activeIncident}/><OperatorBrief incident={activeIncident} privateLocation/>{activeIncident.repeat_offender && <p className="repeat-offender-flag">This account has a repeated false-alarm pattern and needs review.</p>}</>}</section>
         <section className="safety-category-filter" id="communities" aria-label="Filter safety communities"><span>Find your people</span><CategoryChips selected={category} onSelect={setCategory}/></section>
         <section className="safety-bento" aria-label="Your safety tools">
-          <div className="bento-card safe-walk-bento" id="safe-walk"><SafeWalkPanel demoMode={DEMO_MODE} streamer={streamUser} activeIncident={activeIncident} onEmergency={handleSafeWalkEmergency}/></div>
+          <div className="bento-card safe-walk-bento" id="safe-walk"><SafeWalkPanel demoMode={DEMO_MODE} streamer={streamUser} accessToken={fuleAccount?.access_token || ''} activeIncident={activeIncident} onEmergency={handleSafeWalkEmergency}/></div>
           <div className="bento-card trusted-bento"><div className="bento-card-heading"><span className="bento-illustration trusted-illustration"><UsersRound size={21}/></span><div><h2>Your trusted circle</h2><p>People FULE can reach if you need backup.</p></div></div><TrustedContacts streamerId={streamUser?.id || 'demo-streamer'} connected={Boolean(streamUser)} accessToken={fuleAccount?.access_token || ''} demoMode={DEMO_MODE} compact/></div>
           <div className="bento-card evidence-bento"><div className="bento-card-heading"><span className="bento-illustration evidence-illustration"><ShieldCheck size={21}/></span><div><h2>Evidence vault</h2><p>Private recordings and incident case files.</p></div></div><p className="bento-detail">When an incident is active, choose encrypted audio or video capture. Verified guardians can review the tamper-evident case file.</p>{activeIncident ? <EvidenceRecorder incident={activeIncident} streamerToken={evidenceToken}/> : <button className="bento-text-link" type="button" onClick={() => setAlertsOpen(true)}>View incident records <ArrowRight size={14}/></button>}</div>
           <div className="bento-card guardian-bento" id="guardians"><TopGuardiansSection demoMode={DEMO_MODE} search={search} title="Guardians nearby"/></div>
@@ -227,11 +239,11 @@ export default function App() {
         <LiveStreamsSection demoMode={DEMO_MODE} incidents={filteredIncidents} search={search} category={category}/>
         {DEMO_MODE && <details className="demo-drawer"><summary>Demo controls <span>Simulated triggers · no real contacts</span></summary><DemoTriggers onTrigger={triggerSos} disabled={Boolean(active)} sending={sending}/></details>}
         <details className="insights-drawer"><summary>Demo &amp; Insights <span>Network pulse and anonymized map</span></summary><div className="insights-content"><NetworkPulse stats={networkStats} demoMode={DEMO_MODE}/><MapCard incidents={incidents} demoMode={DEMO_MODE}/></div></details>
-        <section className="alarm-option-card" id="settings"><span className="alarm-option-icon"><BellRing size={17}/></span><span><strong>Loud emergency alarm</strong><small>Play an audible signal during your active SOS.</small></span><input type="checkbox" checked={alarmEnabled} onChange={(event) => setAlarmEnabled(event.target.checked)} aria-label="Toggle loud emergency alarm"/><button type="button" className="shake-sos-enable" onClick={enableShakeSOS} disabled={motionReady} aria-label="Enable shake gesture for emergency SOS">{motionReady ? 'Shake SOS enabled' : 'Enable shake SOS'}</button></section>
+        <section className="alarm-option-card" id="settings"><span className="alarm-option-icon"><BellRing size={17}/></span><span><strong>Incident triage context</strong><small>Choose how sensitive the local rules should be to your stated risk.</small></span><label className="triage-risk-control" htmlFor="triage-risk">Risk level<select id="triage-risk" value={riskLevel} onChange={(event) => setRiskLevel(event.target.value)}><option value="standard">Standard</option><option value="elevated">Elevated</option><option value="high">High</option></select></label><span className="alarm-option-separator"><strong>Loud emergency alarm</strong><small>Play an audible signal during your active SOS.</small></span><input type="checkbox" checked={alarmEnabled} onChange={(event) => setAlarmEnabled(event.target.checked)} aria-label="Toggle loud emergency alarm"/><button type="button" className="shake-sos-enable" onClick={enableShakeSOS} disabled={motionReady} aria-label="Enable shake gesture for emergency SOS">{motionReady ? 'Shake SOS enabled' : 'Enable shake SOS'}</button></section>
       </div></div>
       <footer className="page-footer"><span>FULE · Futuristic Use of Live Entertainment</span><span>Community safety, with consent and privacy</span></footer>
     </main>
-    {alertsOpen && <div className="drawer-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setAlertsOpen(false); }}><section className="alert-drawer" role="dialog" aria-modal="true" aria-label="Emergency alerts"><button className="drawer-close" onClick={() => setAlertsOpen(false)} aria-label="Close alerts"><X size={18}/></button><AlertPanel search={search} onIncidentsChange={setIncidents} onRoleChange={setRole} onStatus={setSocketStatus} demoMode={DEMO_MODE} demoAlerts={demoAlerts}/></section></div>}
+    {alertsOpen && <div className="drawer-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setAlertsOpen(false); }}><section className="alert-drawer" role="dialog" aria-modal="true" aria-label="Emergency alerts"><button className="drawer-close" onClick={() => setAlertsOpen(false)} aria-label="Close alerts"><X size={18}/></button><AlertPanel search={search} onIncidentsChange={setIncidents} onRoleChange={setRole} onStatus={setSocketStatus} demoMode={DEMO_MODE} demoAlerts={demoAlerts} account={fuleAccount}/></section></div>}
     <SosButton onClick={triggerSos} sending={sending} active={Boolean(active)}/>
     <CancelToast incident={activeIncident} seconds={remaining} onCancel={cancelSos} onStandDown={standDownSos}/>
   </div>;

@@ -17,7 +17,7 @@ export default function HoldSosButton({ onTrigger, disabled = false, className =
     setProgress(0);
   }, []);
 
-  const begin = useCallback(() => {
+  const begin = useCallback((source = 'button') => {
     if (disabled || timer.current) return;
     fired.current = false;
     startedAt.current = performance.now();
@@ -30,7 +30,7 @@ export default function HoldSosButton({ onTrigger, disabled = false, className =
     timer.current = window.setTimeout(() => {
       fired.current = true;
       stop();
-      onTrigger?.();
+      onTrigger?.(source);
     }, HOLD_MS);
   }, [disabled, onTrigger, stop]);
 
@@ -39,7 +39,7 @@ export default function HoldSosButton({ onTrigger, disabled = false, className =
     const down = (event) => {
       const target = event.target;
       const editing = target instanceof HTMLElement && (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName));
-      if (event.key.toLowerCase() === 's' && !event.repeat && !editing) begin();
+      if (event.key.toLowerCase() === 's' && !event.repeat && !editing) begin('keyboard');
     };
     const up = (event) => { if (event.key.toLowerCase() === 's') stop(); };
     window.addEventListener('keydown', down);
@@ -54,11 +54,11 @@ export default function HoldSosButton({ onTrigger, disabled = false, className =
   }, [begin, shortcut, stop]);
 
   const keyDown = (event) => {
-    if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); begin(); }
+    if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); begin('keyboard'); }
   };
   const keyUp = (event) => { if (event.key === 'Enter' || event.key === ' ') stop(); };
 
-  return <button type="button" className={`hold-sos ${className}`} style={{ '--hold-progress': progress }} disabled={disabled} aria-label={label} aria-description="Press and hold for one second to trigger an SOS" onPointerDown={(event) => { event.currentTarget.setPointerCapture?.(event.pointerId); begin(); }} onPointerUp={stop} onPointerCancel={stop} onPointerLeave={stop} onKeyDown={keyDown} onKeyUp={keyUp} onContextMenu={(event) => event.preventDefault()}>
+  return <button type="button" className={`hold-sos ${className}`} style={{ '--hold-progress': progress }} disabled={disabled} aria-label={label} aria-description="Press and hold for one second to trigger an SOS" onPointerDown={(event) => { event.currentTarget.setPointerCapture?.(event.pointerId); begin('button'); }} onPointerUp={stop} onPointerCancel={stop} onPointerLeave={stop} onKeyDown={keyDown} onKeyUp={keyUp} onContextMenu={(event) => event.preventDefault()}>
     <span className="hold-sos-ring" aria-hidden="true"/>{children}
   </button>;
 }

@@ -20,7 +20,7 @@ const backend = spawn(process.execPath, ['server.js'], {
     ...process.env, NODE_ENV: 'development', PORT: String(port), FRONTEND_ORIGIN: frontendOrigin,
     DEMO_MODE: 'true', DATABASE_URL: '', REDIS_URL: '', FULE_STORAGE: 'memory', FULE_DATA_DIR: dataDirectory,
     FULE_API_IP_LIMIT: '10000', FULE_SOS_IP_LIMIT: '10000', SOCKETS_PER_IP_LIMIT: '2000', SOCKET_CONNECT_RATE_LIMIT: '2000',
-    OPENAI_API_KEY: '', TWITCH_CLIENT_ID: '', TWITCH_CLIENT_SECRET: '', FULE_DEMO_GUARDIAN_INVITE: 'local-load-test-invite-only'
+    JWT_ACCESS_SECRET: 'local-load-test-secret-123456789012345678901234'
   },
   stdio: ['ignore', 'ignore', 'inherit']
 });
@@ -122,7 +122,7 @@ try {
     profile: { environment: 'single-process local demo; in-memory repository; no PostgreSQL or Redis', concurrent_socket_clients: connectionsUp, target_sos_per_second: eventRate, duration_seconds: durationSeconds, requests_sent: requestsSent, load_window_seconds: Number(loadWindowSeconds.toFixed(2)), achieved_sos_per_second: Number((requestsSent / loadWindowSeconds).toFixed(2)) },
     alerts: { delivered: latencies.length, missing: pending.size, request_errors: errors.length, request_error_rate: Number((errors.length / Math.max(requestsSent, 1)).toFixed(4)), response_status_counts: statusCounts, network_or_timeout_errors: errors.filter((error) => error === 'network').length, delivery_latency_ms: { p50: percentile(latencies, 0.50), p95: percentile(latencies, 0.95), p99: percentile(latencies, 0.99) }, request_latency_ms: { p50: percentile(requestTimes, 0.50), p95: percentile(requestTimes, 0.95), p99: percentile(requestTimes, 0.99) } },
     resources: { backend_rss_peak_mb: Number((Math.max(...resourceSamples.map((item) => item.rss_bytes || 0)) / 1024 / 1024).toFixed(2)), backend_rss_final_mb: Number(((resourceSamples.at(-1)?.rss_bytes || 0) / 1024 / 1024).toFixed(2)), backend_cpu_user_seconds: Number(((resourceSamples.at(-1)?.cpu_user_seconds || 0) - (resourceSamples[0]?.cpu_user_seconds || 0)).toFixed(2)), backend_cpu_system_seconds: Number(((resourceSamples.at(-1)?.cpu_system_seconds || 0) - (resourceSamples[0]?.cpu_system_seconds || 0)).toFixed(2)), sample_count: resourceSamples.length, logical_cpu_count: cpus().length },
-    limitations: ['This run does not use PostgreSQL, Redis, multiple API instances, TLS, Twitch, or a dispatch provider.', 'CPU and memory values are from the backend process Prometheus metrics; host, Postgres, and Redis resource use are not included.']
+    limitations: ['This historical run used one process and did not use the self-hosted PostgreSQL, Redis, or media stack.', 'CPU and memory values are from the backend process Prometheus metrics; host, Postgres, and Redis resource use are not included.']
   };
   await mkdir(resolve('load-tests/results'), { recursive: true });
   await writeFile(resolve('load-tests/results/local-baseline.json'), `${JSON.stringify(result, null, 2)}\n`);

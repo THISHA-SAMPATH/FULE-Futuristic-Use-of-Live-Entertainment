@@ -1,10 +1,10 @@
 import test, { before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { createServer } from 'node:net';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -18,8 +18,7 @@ let origin;
 let child;
 let dataDir;
 const sockets = new Set();
-const guardianInvite = 'integration-guardian-invite-2026';
-const secondGuardianInvite = 'integration-second-guardian-invite-2026';
+const testJwtSecret = 'integration-secret-long-enough-for-authentication-123456';
 let cachedGuardian;
 
 async function freePort() {
@@ -71,19 +70,12 @@ async function connected(client) {
 
 async function verifyGuardian() {
   if (cachedGuardian) return cachedGuardian;
-  const response = await fetch(`${origin}/api/guardians/verify`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ invite_code: guardianInvite })
-  });
-  assert.equal(response.status, 200);
-  cachedGuardian = await response.json();
+  cachedGuardian = { guardian_id: 'integration-guardian-1', access_token: jwt.sign({ sub: 'integration-guardian-1', role: 'guardian' }, testJwtSecret, { expiresIn: '10m', issuer: 'fule' }) };
   return cachedGuardian;
 }
 
 async function verifySecondGuardian() {
-  const response = await fetch(`${origin}/api/guardians/verify`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ invite_code: secondGuardianInvite }) });
-  assert.equal(response.status, 200);
-  return response.json();
+  return { guardian_id: 'integration-guardian-2', access_token: jwt.sign({ sub: 'integration-guardian-2', role: 'guardian' }, testJwtSecret, { expiresIn: '10m', issuer: 'fule' }) };
 }
 
 async function createSos(streamerId, module_type = 'FULE_PROTECT', source = 'button', transcript = 'I am safe but would like someone to check in.') {
@@ -103,7 +95,6 @@ before(async () => {
   port = await freePort();
   origin = `http://127.0.0.1:${port}`;
   dataDir = await mkdtemp(join(tmpdir(), 'fule-integration-'));
-  await writeFile(join(dataDir, 'guardians.json'), `${JSON.stringify([guardianInvite, secondGuardianInvite].map((invite, index) => ({ guardian_id: `integration-guardian-${index + 1}`, invite_code_hash: createHash('sha256').update(invite).digest('hex'), active: true, demo: true }))) }\n`);
   child = spawn(process.execPath, ['server.js'], {
     cwd: backendDir,
     env: {
@@ -113,11 +104,7 @@ before(async () => {
       DEMO_MODE: 'true',
       DATABASE_URL: '',
       REDIS_URL: '',
-      TWITCH_CLIENT_ID: 'integration-client-id',
-      TWITCH_INTEGRATION_ENABLED: 'true',
-      TWITCH_CLIENT_SECRET: 'integration-client-secret',
-      TWITCH_REDIRECT_URI: `${origin}/auth/twitch/callback`,
-      FULE_DEMO_GUARDIAN_INVITE: guardianInvite,
+      JWT_ACCESS_SECRET: testJwtSecret,
       FULE_DATA_DIR: dataDir,
       EVIDENCE_STORAGE_DIR: join(dataDir, 'evidence'),
       FULE_CONTACTS_DELAY_MS: '350',
@@ -126,9 +113,7 @@ before(async () => {
       FULE_SOS_IP_LIMIT: '100',
       FULE_API_IP_LIMIT: '1000',
       FULE_DEFAULT_ROUTE_LIMIT: '600',
-      FULE_TWITCH_SESSION_LIMIT: '1',
-      FULE_GUARDIAN_VERIFY_LIMIT: '100',
-      OPENAI_API_KEY: ''
+      FULE_GUARDIAN_VERIFY_LIMIT: '100'
     },
     stdio: 'ignore'
   });
@@ -139,11 +124,8 @@ test('request IDs are echoed and route latency histograms are exported', async (
   const response = await fetch(`${origin}/api/health`, { headers: { 'X-Request-Id': 'integration-request-id-001' } });
   assert.equal(response.headers.get('x-request-id'), 'integration-request-id-001');
   assert.equal(response.status, 200);
-  const allowed = await fetch(`${origin}/api/twitch/session`);
-  assert.equal(allowed.status, 200);
-  const limited = await fetch(`${origin}/api/twitch/session`);
-  assert.equal(limited.status, 429);
-  assert.ok(Number(limited.headers.get('retry-after')) > 0);
+  const health = await fetch(`${origin}/api/health`);
+  assert.equal(health.status, 200);
   const metrics = await fetch(`${origin}/metrics`);
   const body = await metrics.text();
   assert.match(body, /fule_http_request_duration_seconds_bucket/);
@@ -172,9 +154,9 @@ test('health reports demo degradation while SOS alert delivery still reaches con
   const health = await (await fetch(`${origin}/api/health`)).json();
   assert.equal(health.alerts_available, true);
   assert.ok(health.degraded_modes.includes('database_demo_file_storage'));
-  assert.ok(health.degraded_modes.includes('ai_deterministic_fallback'));
+  assert.ok(health.degraded_modes.includes('transparent_local_triage'));
   const guardian = await verifyGuardian();
-  const guardianSocket = socket({ guardianToken: guardian.access_token });
+  const guardianSocket = socket({ accessToken: guardian.access_token });
   await connected(guardianSocket);
   const alert = once(guardianSocket, 'sos_activated');
   const created = await createSos(`degraded-${randomUUID()}`);
@@ -264,7 +246,7 @@ test('central guardian authorization rejects expired access tokens with 401', as
 
 test('nearby on-duty guardian sees approximate area until acceptance reveals exact incident location', async () => {
   const guardian = await verifyGuardian();
-  const guardianSocket = socket({ guardianToken: guardian.access_token });
+  const guardianSocket = socket({ accessToken: guardian.access_token });
   await connected(guardianSocket);
   const duty = await fetch(`${origin}/api/guardians/duty`, {
     method: 'POST', headers: { Authorization: `Bearer ${guardian.access_token}`, 'Content-Type': 'application/json' },
@@ -340,7 +322,7 @@ test('safe-walk push subscription is validated and stored per signed-in streamer
 
 test('duress check-in appears normal to the streamer and silently escalates only to guardians', async () => {
   const guardian = await verifyGuardian();
-  const guardianSocket = socket({ guardianToken: guardian.access_token });
+  const guardianSocket = socket({ accessToken: guardian.access_token });
   const publicSocket = socket();
   await Promise.all([connected(guardianSocket), connected(publicSocket)]);
   const start = await fetch(`${origin}/api/safe-walks`, {
@@ -384,36 +366,9 @@ test('demo API accepts Vite fallback localhost origins with CORS credentials', a
   assert.equal(response.headers.get('access-control-allow-credentials'), 'true');
 });
 
-test('Twitch OAuth route redirects with scopes and browser-bound one-time state', async () => {
-  const start = await fetch(`${origin}/auth/twitch`, { redirect: 'manual' });
-  assert.equal(start.status, 302);
-  const authorization = new URL(start.headers.get('location'));
-  assert.equal(authorization.origin, 'https://id.twitch.tv');
-  assert.equal(authorization.pathname, '/oauth2/authorize');
-  assert.equal(authorization.searchParams.get('client_id'), 'integration-client-id');
-  assert.equal(authorization.searchParams.get('response_type'), 'code');
-  assert.equal(authorization.searchParams.get('redirect_uri'), `${origin}/auth/twitch/callback`);
-  assert.ok(authorization.searchParams.get('scope').includes('user:read:chat'));
-  assert.ok(authorization.searchParams.get('scope').includes('channel:read:redemptions'));
-  assert.ok(authorization.searchParams.get('scope').includes('clips:edit'));
-  assert.ok(authorization.searchParams.get('scope').includes('channel:manage:redemptions'));
-  const setCookie = start.headers.get('set-cookie') || '';
-  const boundState = setCookie.match(/fule_twitch_oauth_state=([^;]+)/)?.[1];
-  assert.equal(boundState, authorization.searchParams.get('state'));
-  assert.match(setCookie, /HttpOnly/i);
-  assert.match(setCookie, /SameSite=Lax/i);
-
-  const callback = new URL(`${origin}/auth/twitch/callback`);
-  callback.searchParams.set('state', authorization.searchParams.get('state'));
-  callback.searchParams.set('error', 'access_denied');
-  const forged = await fetch(callback, { headers: { Cookie: 'fule_twitch_oauth_state=wrong-browser' } });
-  assert.equal(forged.status, 400);
-  assert.match(await forged.text(), /Invalid or expired Twitch authorization state/);
-});
-
 test('guardian receives exact incident while public room receives redacted event', async () => {
   const guardian = await verifyGuardian();
-  const privateSocket = socket({ guardianToken: guardian.access_token });
+  const privateSocket = socket({ accessToken: guardian.access_token });
   const publicSocket = socket();
   await Promise.all([connected(privateSocket), connected(publicSocket)]);
   const privateEvent = once(privateSocket, 'sos_activated');
@@ -459,7 +414,7 @@ test('evidence chunk upload is encrypted at rest and appears in a verified case 
 
 test('verified guardian acknowledgement sets registry identity and broadcasts state', async () => {
   const guardian = await verifyGuardian();
-  const privateSocket = socket({ guardianToken: guardian.access_token });
+  const privateSocket = socket({ accessToken: guardian.access_token });
   await connected(privateSocket);
   const activated = once(privateSocket, 'sos_activated');
   const response = await createSos('ack-streamer');
@@ -501,7 +456,7 @@ test('streamer can cancel during grace and false-alarm flow is accepted', async 
 
 test('unacknowledged SOS escalates and flags emergency services reminder', async () => {
   const guardian = await verifyGuardian();
-  const privateSocket = socket({ guardianToken: guardian.access_token });
+  const privateSocket = socket({ accessToken: guardian.access_token });
   await connected(privateSocket);
   const activation = once(privateSocket, 'sos_activated');
   const response = await createSos('escalate-streamer');
@@ -516,11 +471,11 @@ test('unacknowledged SOS escalates and flags emergency services reminder', async
   assert.equal(result.dispatch_record.status, 'SENT');
 });
 
-test('T+30 notifies configured trusted contacts using the demo Twilio fallback', async () => {
+test('T+30 notifies trusted contacts through in-app Web Push when available', async () => {
   const guardian = await verifyGuardian();
-  const privateSocket = socket({ guardianToken: guardian.access_token });
+  const privateSocket = socket({ accessToken: guardian.access_token });
   await connected(privateSocket);
-  const saved = await fetch(`${origin}/api/streamer/trusted-contacts`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ streamer_id: 'contact-streamer', contacts: [{ name: 'Trusted Friend', phone: '+14155550123' }] }) });
+  const saved = await fetch(`${origin}/api/streamer/trusted-contacts`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ streamer_id: 'contact-streamer', contacts: [{ name: 'Trusted Friend', email: 'friend@example.test' }] }) });
   assert.equal(saved.status, 200);
   const activated = once(privateSocket, 'sos_activated');
   const response = await createSos('contact-streamer');
@@ -528,8 +483,8 @@ test('T+30 notifies configured trusted contacts using the demo Twilio fallback',
   const incident = await activated;
   const notified = onceIncident(privateSocket, 'trusted_contacts_notified', incident.incident_id, 2500);
   const result = await notified;
-  assert.equal(result.status, 'MOCKED');
-  assert.equal(result.count, 1);
+  assert.equal(result.status, 'SKIPPED');
+  assert.equal(result.count, 0);
 });
 
 test('CRITICAL SOS dispatches immediately', async () => {

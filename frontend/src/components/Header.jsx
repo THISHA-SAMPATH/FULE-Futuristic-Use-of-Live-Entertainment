@@ -1,9 +1,8 @@
 import { useRef, useState } from 'react';
 import { Bell, Search, ShieldAlert } from 'lucide-react';
-import { API_URL } from '../config.js';
 import HoldSosButton from './HoldSosButton.jsx';
 
-export default function Header({ search, onSearch, onTrigger, onOpenAlerts, alertsOpen = false, sending, active, user, account, twitchEnabled = false, unreadCount, demoMode = false }) {
+export default function Header({ search, onSearch, onTrigger, onOpenAlerts, alertsOpen = false, sending, active, account, unreadCount, demoMode = false }) {
   const [searchOpen, setSearchOpen] = useState(false);
   const inputRef = useRef(null);
   function openSearch() {
@@ -16,7 +15,7 @@ export default function Header({ search, onSearch, onTrigger, onOpenAlerts, aler
     <div className="header-actions">
       <HoldSosButton className="header-sos" onTrigger={onTrigger} disabled={sending || active} label={active ? 'SOS active' : 'Hold to start live SOS'}><ShieldAlert size={16}/><span className="header-sos-label-desktop">{sending ? 'Starting…' : active ? 'SOS active' : 'SOS'}</span><span className="header-sos-label-mobile">{sending ? 'Sending' : active ? 'Active' : 'SOS'}</span></HoldSosButton>
       <button className="notification-button" onClick={onOpenAlerts} aria-label={`${unreadCount} unread emergency alerts`} aria-haspopup="dialog" aria-expanded={alertsOpen}><Bell size={18}/>{unreadCount > 0 && <span>{unreadCount > 9 ? '9+' : unreadCount}</span>}</button>
-      {user ? <button className="profile-button" aria-label={`Connected Twitch channel ${user.login}`} title={user.login}>{user.profile_image_url ? <img src={user.profile_image_url} alt="" referrerPolicy="no-referrer"/> : <span className="profile-avatar-fallback">{user.login.slice(0, 1).toUpperCase()}</span>}</button> : account ? <button className="profile-button" aria-label={`Signed in as ${account.email}`} title={account.email}><span className="profile-avatar-fallback">{account.email.slice(0, 1).toUpperCase()}</span></button> : twitchEnabled ? <a className="connect-twitch" href={`${API_URL}/auth/twitch`}>Connect Twitch</a> : <span className="profile-button profile-guest" aria-label="Guest profile"><span className="profile-avatar-fallback">F</span></span>}
+      {account ? <button className="profile-button" aria-label={`Signed in as ${account.email}`} title={account.email}><span className="profile-avatar-fallback">{account.email.slice(0, 1).toUpperCase()}</span></button> : <span className="profile-button profile-guest" aria-label="Guest profile"><span className="profile-avatar-fallback">F</span></span>}
       {demoMode && <span className="header-demo-badge">Demo</span>}
     </div>
   </header>;

@@ -1,80 +1,62 @@
-# FULE — Devpost submission
+# FULE submission notes
 
-## Project description
+## Devpost description
 
-**FULE (Futuristic Use of Live Entertainment)** turns Twitch's live, participatory community into a consent-led safety check-in and guardian response network. Our primary module, **FULE Protect**, gives a streamer a one-touch simulated SOS flow, sends a structured alert to verified guardians in real time, and records state changes so responders can coordinate and review an incident.
+### Problem
 
-FULE is a hackathon prototype, not an emergency dispatch service. It does not contact emergency services. It supplements, but does not replace, emergency services (112).
+People can feel vulnerable while traveling, and informal community help is hard to coordinate quickly without exposing sensitive details to everyone.
 
-## Problem
+### Solution
 
-During a distressing public moment, someone may need a fast way to signal trusted people without composing a message or revealing sensitive details to a broad audience. A livestream community already has moderators, viewers and live context, but those pieces are not normally organized into a privacy-aware, auditable response workflow.
+FULE is a self-hosted safety network that lets a member raise an in-app SOS, privately notify approved guardians, share a consent-based live incident room, and preserve tamper-evident evidence. Public notices are anonymized. Rule-based triage exposes its factors rather than presenting a model's guess as fact.
 
-## Solution
+### Features
 
-FULE uses a streamer-triggered SOS and a verified guardian channel to turn community attention into a structured response: the streamer can cancel before dispatch, guardians see context and acknowledge, AI can summarize the transcript, public updates stay coarse and redacted, and production incident history is stored in PostgreSQL with Redis-backed escalation jobs.
+- In-app hold, keyboard, and shake SOS triggers.
+- Rule-based incident severity and action recommendation.
+- Private guardian alerts, acknowledgements, escalation timeline, and simulated control room.
+- Optional self-hosted media, encrypted evidence, and hash-chain verification.
+- Demo mode with synthetic location and a generated looping stream.
 
-## Features
+### How Codex was used
 
-- Mobile-ready SOS controls with a 10-second cancel window and optional audible alarm.
-- Guardian invite verification, private real-time alerts, acknowledgement and escalation timer.
-- Three simulated demo trigger sources: button, `!sos` chat, and Silent SOS redemption.
-- Twitch OAuth, broadcaster-authored chat commands, Channel Points redemption, EventSub reconnection and optional clip evidence when configured with credentials.
-- AI incident synthesis with a deterministic offline/demo fallback.
-- Public/guardian data separation, coarse public locations, and a persisted incident history/audit trail.
-- Responsive Twitch-style dashboard with stream cards, guardian directory, categories, alerts, network panel and anonymized map visualization.
+Codex collaborated throughout the build: repository review, architecture and data-model work, implementation iterations, responsive UI refinement, test creation, bug fixes, and documentation. The team reviewed the generated changes, selected product behavior, and owns deployment and demo claims.
 
-## How we used OpenAI Codex
+### Challenges
 
-We used OpenAI Codex as an iterative engineering collaborator across the build. We supplied the product concept and project rules, asked Codex to inspect the existing repository before implementation, and used it to shape the architecture and shared incident schema. Codex helped implement and refine the React dashboard, Express and Socket.IO incident pipeline, guardian verification, Twitch OAuth/EventSub integration, privacy filtering, AI structured summaries with offline fallback, and deployment/documentation setup. We then asked Codex to audit behavior against tests and local UI flows, fix prioritized findings, add mocked integration and frontend tests, and prepare the Devpost materials. Human review remained responsible for product decisions, Twitch account setup, deployment secrets, and judging-demo claims.
+The key tradeoff is fast alert delivery with strict location privacy. FULE sends an initial guardian alert without waiting for synthesis, keeps precise coordinates out of public notices, and makes infrastructure failures visible while preserving the in-app response path.
 
-## Challenges
+### What's next
 
-- **Balancing speed with privacy:** guardians need actionable details while a public audience should not see precise coordinates or private context.
-- **Resilient live integrations:** Twitch OAuth, EventSub reconnects, chat/redeem sources and asynchronous clips can fail independently; the demo must still operate offline.
-- **Keeping the demo honest:** seeded profiles, coordinates and trigger sources must be clearly identified as synthetic and must not imply a real emergency response.
-- **Durable coordination:** production uses PostgreSQL and BullMQ/Redis for state and scheduled escalation work; local demos use a swappable file repository.
-
-## What's next
-
-- Complete an end-to-end test using the team's authorized Twitch channel and deployed Vercel/Render domains.
-- Complete operational review of administrator-approved guardian accounts and trusted contact notification.
-- Add encrypted evidence retention, explicit retention controls and audited deletion.
-- Run the 1,000-client/50-SOS-per-second test against provisioned PostgreSQL and Redis, then tune from measured results.
-- Run accessibility and threat-model reviews with safety advocates before any real-world pilot.
+Run a privacy and threat-model review, validate mobile network behavior, test recovery from service restarts, and benchmark a measured deployment before inviting real users.
 
 ## Architecture
 
 ```mermaid
 flowchart LR
-  Streamer[Streamer: React + Vite] -->|HTTPS SOS request| API[Node + Express API]
-  Streamer -->|cancel token actions| Socket[Socket.IO]
-  Twitch[Twitch OAuth / EventSub / Helix] --> API
-  API --> AI[OpenAI structured synthesis]
-  API -->|offline fallback| Fallback[Deterministic incident summary]
-  API --> DB[(PostgreSQL · Knex)]
-  API --> Redis[(Redis)]
-  Redis --> Adapter[Socket.IO Redis adapter]
-  Redis --> Jobs[BullMQ timers + retention]
-  API --> Audit[(PostgreSQL audit events)]
-  API -->|precise guardian-only alerts| Socket
-  API -->|coarse redacted updates| Socket
-  Socket --> Guardians[Verified guardian dashboard]
-  Socket --> Public[Community viewer feed]
-  Guardians -->|acknowledgement| API
+  PWA[React PWA] --> API[Express and Socket.IO]
+  API --> PG[(PostgreSQL)]
+  API --> Redis[(Redis and BullMQ)]
+  API --> Triage[Rule triage]
+  API --> Push[Web Push]
+  PWA --> SFU[Self-hosted WebRTC]
+  SFU --> TURN[coturn]
+  SFU --> Store[(MinIO)]
+  API --> Store
+  API --> Dispatch[Simulated control room]
 ```
 
-## 60–90 second demo video shot list
+## 60–90 second demo video
 
-| Time | Shot / action | Narration focus |
+| Time | Shot | Narration |
 |---|---|---|
-| 0–8s | Open FULE dashboard; frame the hero, DEMO MODE badge and guardian alert panel. | “FULE turns a live community into a privacy-aware safety check-in network. This is a synthetic demo.” |
-| 8–18s | Show **Demo Triggers**; choose **Walking alone at night** and show the transcript and source controls. | Explain that button, chat and redeem sources share the same incident pipeline. |
-| 18–30s | Click **Button SOS**; capture the alert appearing and the cancel countdown. | Show quick activation, structured AI summary and the short cancel grace. |
-| 30–42s | Show approximate location in the alert and exact pin only after verifying the demo guardian; point at the privacy note. | Explain public redaction versus guardian-only details. |
-| 42–54s | Cancel the first demo alert, trigger again, then click **ACKNOWLEDGE & DISPATCH**. | Demonstrate streamer cancellation and guardian state change. |
-| 54–66s | Open **Logs** / incident history; show a completed status and persisted record. | Explain PostgreSQL history and audited state changes. |
-| 66–78s | Briefly show the Twitch stream stage and the Twitch setup section in the README or deployment guide. | Describe live OAuth/EventSub and optional clips as credential-enabled integrations. |
-| 78–85s | End on Responsible use note. | “FULE supplements, but does not replace, emergency services (112). This prototype does not contact responders.” |
+| 0–10s | Home dashboard and privacy copy | “FULE helps people ask a trusted local circle for help, with private incident details.” |
+| 10–22s | Hold SOS; show generated test feed | “Demo mode uses synthetic data and a generated stream, so the flow works without a camera.” |
+| 22–38s | Guardian drawer and severity summary | “The transparent rules provide a concise triage summary while guardians get the private alert.” |
+| 38–52s | Acknowledge and show escalation timeline | “A guardian can acknowledge and coordinate; unresolved incidents move through the visible ladder.” |
+| 52–68s | Simulated dispatch control room | “This control room is a simulation. The one-tap 112 control opens the device dialer.” |
+| 68–82s | Evidence integrity view and architecture | “Evidence hashes make later tampering detectable, and every component can be self-hosted.” |
 
-For a concise 60-second live judging run, use the timed walkthrough in [README.md](README.md#60-second-demo-walkthrough). All demo identities, map pulses and trigger sources are synthetic.
+## Demo safety statement
+
+The demo does not contact authorities or contacts. FULE supplements, not replaces, emergency services (112).

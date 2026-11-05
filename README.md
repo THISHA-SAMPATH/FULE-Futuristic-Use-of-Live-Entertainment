@@ -1,74 +1,48 @@
-# FULE — Futuristic Use of Live Entertainment
+# FULE
 
-FULE is a Twitch-centered women's safety and civic guardian network. The **FULE Protect** hackathon MVP lets a streamer raise a simulated SOS, sends a structured alert to verified guardians in real time, and records the incident for later review.
-
-> **Responsible use:** FULE supplements, but does not replace, emergency services (112). Demo mode uses a simulated dispatch provider and never calls an emergency number. Production dispatch requires an official integration with the local emergency authority and operational approval.
-
-## Safe Walk, nearby responders, and evidence
-
-- **Safe Walk Check-in:** A Twitch signed-in streamer can set a destination, ETA, check-in interval, and distinct safe/duress PINs. Redis/BullMQ schedules check-ins and a 60-second response window; local demo mode persists its simulation jobs in `backend/data/demo-jobs.json`. If the check-in expires, FULE raises an SOS with the last location trail. The duress PIN returns the same visible successful check-in state while silently creating an SOS. The browser asks permission before using location, microphone, or camera. Safe and duress PINs are HMAC-hashed server side; `SAFE_WALK_PIN_PEPPER` must be private and stable across instances.
-- Missed check-ins use Web Push when `WEB_PUSH_PUBLIC_KEY` and `WEB_PUSH_PRIVATE_KEY` are configured, including while the site is closed. The service worker sends a generic “Are you OK?” notification and contains no location. Without VAPID keys, the open-page demo still shows the 60-second check-in prompt.
-- **Nearby guardian matching:** verified guardians can opt in to on-duty location sharing. FULE only sends a coarse area to nearby responders within `NEARBY_GUARDIAN_RADIUS_METERS` (default 400 m), nearest first; exact incident details are released after acceptance, with a default cap of five accepted responders. Location records expire from matching after 15 minutes. Responders are instructed: observe, call for help, assist only when safe; never confront.
-- **Evidence Vault:** after SOS, the browser requests microphone permission and uploads 10-second audio chunks; a user can separately start audio + video. The API encrypts each stored chunk with AES-256-GCM and stores its plaintext SHA-256 hash in a hash-chained record. Verified guardians can download a JSON case file from an alert card, including incident summary, response timeline, clips, safe-walk location trail, evidence hashes, chain verification, and chunk download paths. Evidence is retained with the incident retention period.
-
-Evidence chunk bytes use the local filesystem adapter at `EVIDENCE_STORAGE_DIR`; use a durable shared encrypted object-storage adapter before running multiple production instances. Set `EVIDENCE_ENCRYPTION_KEY` to base64-encoded 32 random bytes and retain the same key across instances; production refuses to start without it. The included local adapter is intended for development and single-host demo deployments. Browser recording is opt-in via a permission prompt and is unavailable when permission is denied.
-
-For Web Push, generate VAPID keys with `npx web-push generate-vapid-keys` from `backend/`, set both returned values in the backend environment as `WEB_PUSH_PUBLIC_KEY` and `WEB_PUSH_PRIVATE_KEY`, and set `WEB_PUSH_SUBJECT` to an operator contact such as a `mailto:` address. The private key stays server side; browser subscriptions are stored per streamer.
+FULE (Futuristic Use of Live Entertainment) is a self-hosted, consent-led safety network. A member can start an SOS from the app; nearby verified guardians receive a private real-time alert, rule-based triage summary, and—when configured—a private WebRTC room. Public notices use coarse location only. FULE is a prototype and supplements, never replaces, emergency services.
 
 ## Architecture
 
 ```mermaid
 flowchart LR
-  Streamer[React + Vite streamer UI] -->|POST /api/sos| API[Express API]
-  API --> Synth[OpenAI synthesis / deterministic fallback]
-  API --> DB[(PostgreSQL · Knex migrations)]
-  API --> Audit[(PostgreSQL audit events)]
-  API --> Redis[(Redis)]
-  Redis --> Fanout[Socket.IO Redis adapter]
-  Redis --> Jobs[BullMQ escalation + cleanup jobs]
-  API -->|private exact incident| Guardians[Verified guardian Socket.IO room]
-  API -->|coarse redacted alert| Public[Public Socket.IO room]
-  API -->|T+30 without ack| Twilio[Trusted contacts · Twilio]
-  API -->|T+60 or immediate critical| Bridge[Dispatch Bridge]
-  Bridge --> Sim[SimulatedDispatch · demo default]
-  Bridge --> Webhook[Signed HMAC webhook · production]
-  Webhook --> Authority[Official local emergency authority]
-  Dispatch[Police control room /dispatch] -->|Accept · En route · Resolved| API
-  Twitch[Twitch OAuth + EventSub] --> API
-  Guardians -->|acknowledge / history| API
+  PWA[React PWA] -->|HTTPS + Socket.IO| API[Node / Express]
+  PWA -->|short-lived incident token| SFU[Self-hosted LiveKit SFU]
+  API --> PG[(PostgreSQL)]
+  API --> R[(Redis / BullMQ / Socket adapter)]
+  API --> Triage[Local rule triage]
+  API --> Push[Web Push with VAPID]
+  API --> TURN[coturn]
+  SFU --> Egress[LiveKit Egress]
+  Egress --> M[(MinIO object storage)]
+  API --> M
+  API --> Dispatch[Simulated control room]
 ```
 
-The frontend is React + Vite. The backend is Node.js + Express + Socket.IO. `shared/incident.mjs` defines the shared incident schema and public redaction. Production uses PostgreSQL through Knex migrations, with indexes for status, creation time, and streamer. Redis backs Socket.IO multi-instance fan-out, shared rate limits, and BullMQ escalation/retention jobs. File storage is available only for local demo/test runs without `DATABASE_URL`; production startup fails closed unless PostgreSQL and Redis are configured.
+### What is real vs simulated
 
-Precise coordinates and private incident details go only to verified guardians, the streamer's configured trusted contacts, and the dispatch provider. Public alerts are anonymized/coarse. OpenAI receives coordinates rounded to two decimal places. Secrets remain on the backend.
+- **Real in a configured deployment:** FULE email/password accounts, bcrypt password hashes, rotating refresh tokens, role checks, admin-approved guardian verification, PostgreSQL persistence, Redis fan-out and timers, in-app alerts, Web Push, local rule triage, private incident room authorization, encrypted evidence chunks, hash-chain verification, and the internal dispatch simulation.
+- **Requires local infrastructure and user permission:** live camera/microphone streaming, relay through coturn, server-side recording through Egress, and browser push delivery. See `.env.example` for required settings.
+- **Demo only:** synthetic incident coordinates, generated looping test video, demo dispatch records, and the demo account-free SOS flow. Demo dispatch never contacts authorities.
+- **Not implemented as a real-world emergency integration:** FULE does not call emergency services. The app provides a one-tap `tel:112` link for the user to call directly.
 
-## Emergency dispatch
+## Start the complete local stack
 
-Guardians are alerted at T+0. If nobody acknowledges by T+30 seconds, FULE notifies up to three streamer-managed trusted contacts; the demo mocks Twilio, while production uses the configured Twilio account. At T+60 seconds without acknowledgement, FULE sends the structured report to the Dispatch Bridge. `CRITICAL` incidents dispatch immediately. In demo mode the bridge uses `SimulatedDispatch`; no emergency number is called. In production, set `DISPATCH_WEBHOOK_URL` and `DISPATCH_WEBHOOK_SECRET` only after an official local emergency authority has approved the integration. Webhook requests carry an HMAC-SHA256 signature in `x-fule-signature` and retry transient failures.
-
-Open `/dispatch` for the clearly labeled **SIMULATED DISPATCH** control room in local demo mode. Verified guardians can also access the live queue. The queue includes precise location and transcript details, so it is restricted to guardians and the local simulated dispatch view. Control-room actions update the streamer and guardian dashboards over Socket.IO. A report may be cancelled before dispatch is sent; once sent, use **Stand down** to notify the provider. The dashboard and control room include a `tel:112` action for a person to place a call themselves.
-
-Trusted contacts can be managed from the dashboard's **Trusted Contacts** drawer/section. Store at most three E.164 phone numbers. Contact records and audit events are stored server-side. Set `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, and `TWILIO_FROM_NUMBER` for production notifications; these are ignored in demo mode.
-
-## Production runtime
-
-The API provides `/api/health` (process liveness), `/api/ready` (database/Redis readiness), and `/metrics` (Prometheus; set `METRICS_TOKEN` to protect it). HTTP logs include request IDs. Optional Sentry reporting is enabled with `SENTRY_DSN`. Incident and audit retention defaults to 90 days and runs hourly through BullMQ. Use `DATABASE_URL`, `REDIS_URL`, and a randomly generated `JWT_ACCESS_SECRET` (at least 32 characters) in production. If Twitch OAuth is enabled, set a 32-byte `TWITCH_TOKEN_ENCRYPTION_KEY`; API tokens are AES-256-GCM encrypted in PostgreSQL, and Redis leases ensure one instance owns each broadcaster's EventSub connection. Never reuse the Compose development secrets.
-
-Email/password accounts use bcrypt hashes, 10-minute JWT access tokens, and rotating 30-day refresh tokens. New accounts are users; guardians request approval and only an admin can approve them. Create the first admin with `backend/.env` set and `npm --prefix backend run create:admin`. The old invite flow stays available only in demo mode for backward-compatible local demos. Twitch OAuth remains the separate streamer authorization needed for Twitch APIs.
-
-For local PostgreSQL and Redis, copy `.env.example` to both `.env` (Compose interpolation) and `backend/.env` (backend scripts), then run `docker compose up --build`; the UI is at `http://localhost:4173`, API at `http://localhost:4000`. The sample values are local-demo credentials only. `docker compose down` stops services; `docker compose down -v` also deletes local database/Redis volumes.
-
-Existing SQLite demo data can be copied once after setting `DATABASE_URL` in `backend/.env`:
+Install Docker Desktop or Docker Engine with Compose. From the repository root:
 
 ```powershell
-npm --prefix backend run migrate:sqlite -- "backend/data/incidents.sqlite"
+Copy-Item .env.example .env
+# Edit .env and replace each sample secret before sharing the machine or exposing ports.
+docker compose up --build
 ```
 
-The actual load-test harness and measurement constraints are in [load-tests/README.md](load-tests/README.md) and [LOAD_TEST_REPORT.md](LOAD_TEST_REPORT.md). No performance figures are published until a test run produces them.
+Open [http://localhost:4173](http://localhost:4173). API health: [http://localhost:4000/api/health](http://localhost:4000/api/health). MinIO console: [http://localhost:9001](http://localhost:9001). The backend container applies PostgreSQL migrations before it starts.
 
-## Local quickstart
+Stop with `Ctrl+C`; use `docker compose down` to stop containers. To also erase local PostgreSQL, Redis, object, and evidence data, run `docker compose down -v`.
 
-Requirements: Node.js 22.5+ and npm. From the repository root in PowerShell:
+## Run frontend/backend directly
+
+Requires Node.js 22.5 or newer. PostgreSQL and Redis are needed for accounts and durable jobs; the no-infrastructure demo can use the file-backed repository.
 
 ```powershell
 npm run install:all
@@ -77,73 +51,43 @@ Copy-Item frontend/.env.example frontend/.env
 npm run dev
 ```
 
-Open the Vite URL shown in the terminal (normally `http://localhost:5173`). If that port is busy, Vite automatically selects the next free port; demo-mode CORS accepts localhost Vite ports 5173–5199. The API uses port 4000. Keep `DEMO_MODE=true` in `backend/.env` and `VITE_DEMO_MODE=true` in `frontend/.env` for local demonstration. The demo invite comes from `FULE_DEMO_GUARDIAN_INVITE` in `backend/.env`; the sample value is local demo-only. Change it for your local run. Set both demo flags to `false` for real Twitch login and geolocation requirements. Never enable demo mode or use the sample invite on a public deployment.
+Open the Vite URL shown in the terminal (normally `http://localhost:5173`). The API listens on port 4000. To run only the backend tests use `npm --prefix backend test`; frontend tests use `npm --prefix frontend test`; the production frontend bundle is `npm run build`.
 
-## 60-second demo walkthrough
+## 60-second demo
 
-Start both servers with `npm run dev`, open the dashboard, and use the invite configured by `FULE_DEMO_GUARDIAN_INVITE` in `backend/.env`.
+1. **0–10s:** Open the home screen and point out the simulated stream badge and privacy note.
+2. **10–20s:** Press and hold the coral SOS control for one second. Demo mode uses a synthetic member and location without camera or account setup.
+3. **20–35s:** Show the generated incident card, threat level, coarse public area, guardian alert, and the 10-second cancel window.
+4. **35–45s:** Open the simulated control room and accept the incoming report. Explain that it is an internal simulation.
+5. **45–55s:** Open the incident evidence/case-file view and show the event timeline and integrity hash when seeded evidence is present.
+6. **55–60s:** Point out the direct `Call 112` link and state that demo actions never contact emergency services.
 
-1. **0–8 sec — Orient:** Point out the **DEMO MODE** label, the FULE Protect hero, and the guardian alert panel. Explain that all seeded identities and locations are synthetic.
-2. **8–18 sec — Choose a scenario:** In **Demo Triggers**, select **Walking alone at night**. Show the editable transcript and select **Button SOS** as the trigger source.
-3. **18–30 sec — Trigger:** Click **Button SOS**. Show the incident card appearing immediately with threat level, concise summary, simulated area and 10-second cancel window. The public view receives only anonymized information.
-4. **30–40 sec — Safety controls:** Point out the cancel toast and loud alarm toggle. If the alarm is enabled, browser audio permission may be needed. Cancel the first simulated alert inside the grace period to demonstrate the cancel event.
-5. **40–53 sec — Guardian response:** Trigger once more and, in the verified guardian panel, show the alert state and click **ACKNOWLEDGE & DISPATCH**. The incident state and audit history update; demo actions do not contact anyone.
-6. **53–60 sec — Close:** Show **Logs** / **Incident history** and the privacy notice. State that local demo records use a file adapter, production uses PostgreSQL, and FULE supplements, but does not replace, emergency services (112).
+## Accounts and guardian verification
 
-To demonstrate alternate simulated sources, choose **!sos chat** or **Silent SOS redeem** in Demo Triggers; these are demo-source simulations, not live Twitch chat/redeem events.
-
-## Twitch setup
-
-1. Create a **Confidential** app in the [Twitch Developer Console](https://dev.twitch.tv/console/apps). For local testing, register `http://localhost:4000/auth/twitch/callback` as its OAuth Redirect URL.
-2. In `backend/.env`, set `TWITCH_CLIENT_ID`, `TWITCH_CLIENT_SECRET`, and `TWITCH_REDIRECT_URI` to the exact registered callback. Keep secrets server-side. Set `FRONTEND_ORIGIN=http://localhost:5173`.
-3. Set `DEMO_MODE=false` and `VITE_DEMO_MODE=false`, restart, then use **Connect Twitch**. The authorization requests chat, redemption read/manage, and clip scopes; the extra manage scope is needed to create the Silent SOS reward when missing. Channel Points rewards require an eligible Affiliate or Partner channel.
-4. EventSub accepts broadcaster-authored `!sos` and `!safe`, suppresses repeated commands, and listens for the configured Silent SOS reward. On SOS it requests a clip and polls up to 10 seconds; offline channels continue without clip evidence.
-5. For Twitch embeds, the player reads `window.location.hostname` as its `parent`. Add the exact production app hostname to Twitch's permitted embed domains when required and use the real deployed URL to verify playback.
-
-For production configuration, CORS, OAuth redirect URI, PostgreSQL, Redis, health, metrics, scaling, and retention, see [DEPLOYMENT.md](DEPLOYMENT.md). `frontend/vercel.json` contains SPA fallback routing.
-
-## Private LiveKit SOS streaming
-
-Twitch is optional and disabled by default (`TWITCH_INTEGRATION_ENABLED=false`). FULE's incident stream uses LiveKit WebRTC, so a streamer can raise an SOS without a Twitch account. Demo mode draws a generated test pattern locally and needs no camera, LiveKit server, or network credentials; it is explicitly simulated and is not transmitted to a guardian.
-
-### LiveKit Cloud
-
-1. Create a LiveKit Cloud project and copy its WebSocket URL, API key, and API secret into `LIVEKIT_URL`, `LIVEKIT_API_KEY`, and `LIVEKIT_API_SECRET` in `backend/.env`. Keep the secret server-side.
-2. Set `DEMO_MODE=false` for the backend. For the frontend build, set `VITE_DEMO_MODE=false` and `VITE_API_URL` to the deployed API origin. Configure backend CORS with the exact frontend origin.
-3. Restart the backend and deploy/rebuild the frontend. A streamer signs in with a FULE account or Twitch, grants camera/microphone access, and starts an SOS. A verified guardian must accept the incident before receiving a subscribe-only token.
-4. For evidence recording, configure `LIVEKIT_WEBHOOK_URL` to the publicly reachable `https://<api-host>/api/livekit/webhook`, `LIVEKIT_EGRESS_S3_BUCKET`, AWS-compatible credentials, region, and optional S3 endpoint. LiveKit must be able to reach the webhook and bucket. Recording is optional; live alert and acknowledgement continue if egress is unavailable.
-5. Set `LIVEKIT_RECORDING_RETENTION_DAYS` to the approved retention period. The hourly cleanup deletes expired recording objects and appends a retention tombstone to the tamper-evident evidence chain.
-
-### Local self-hosted demo
-
-The optional compose overlay starts LiveKit, Egress, Redis, and MinIO alongside the app. In PowerShell, copy the env file as in Local quickstart, then run:
+Create a local administrator account by setting `DATABASE_URL`, `ADMIN_EMAIL`, and `ADMIN_PASSWORD` in `backend/.env`, then run:
 
 ```powershell
-docker compose -f docker-compose.yml -f docker-compose.livekit.yml up --build
+npm --prefix backend run create:admin
 ```
 
-The overlay contains development-only LiveKit and MinIO credentials; replace them before any network-accessible deployment. Use TLS/WSS, strong generated keys, firewall rules, and durable object storage outside local development. Check `docker-compose.livekit.yml` for the local ports. To return to the offline simulator, stop the overlay and leave `DEMO_MODE=true`.
+Members register with email and a password (minimum 12 characters); passwords are bcrypt-hashed. Access JWTs are short-lived and refresh tokens rotate. A member can request guardian status from the Guardian panel; an administrator reviews pending requests at `/api/admin/guardians/pending` and approves with `POST /api/admin/guardians/:accountId/approve` using an administrator access token.
 
-### Access, bandwidth, and cost
+## Self-hosted media and push setup
 
-Each incident gets a separate private room and opaque room name. Short-lived JWT grants are scoped to that room: the streamer can publish but cannot subscribe; verified guardians can subscribe only after accepting/being acknowledged; trusted contacts receive a time-limited, incident-bound viewer grant. Public clients never receive stream credentials. On incident close or stand-down, FULE removes room participants, revokes token timestamps, and deletes the room. This complements—not replaces—incident authorization and must be paired with HTTPS/WSS in deployment.
+- Compose includes LiveKit SFU, LiveKit Egress, coturn, and MinIO. Replace all development credentials before exposing the stack beyond localhost. Set `LIVEKIT_PUBLIC_URL` to the browser-reachable secure signaling URL, set a reachable `TURN_EXTERNAL_IP` and `LIVEKIT_TURN_URL` for remote clients, and open LiveKit/coturn UDP ranges in the host firewall.
+- LiveKit room credentials are scoped to an incident and expire quickly. Stream subscriptions are limited to the streamer, their trusted circle, and guardians accepted for the incident. Room access is revoked when the incident closes.
+- Egress recordings are written to MinIO; each completed recording is hashed into the evidence chain. `LIVEKIT_RECORDING_RETENTION_DAYS` controls recording retention.
+- Generate VAPID key material locally using `npx web-push generate-vapid-keys`; put the resulting keys in the backend environment. Keep private keys on the server.
+- Browsers may deliver Web Push through their configured push transport. FULE does not use a text-message provider.
 
-Capture requests the rear camera at up to 480p with echo cancellation/noise suppression. Published video is capped at 400 kbit/s and 15 fps; room capacity defaults to 12 participants (`LIVEKIT_MAX_PARTICIPANTS`). Poor connection quality mutes video and keeps the alert/acknowledgement path available. Audio-only publishing is used when camera capture fails. Actual network usage varies with codec, audio, packet overhead, and the number of subscribers; each downstream viewer consumes additional egress bandwidth.
+## Configuration
 
-LiveKit Cloud billing is usage-based and can include participant connection/data transfer and Egress recording minutes; S3 storage/requests and network transfer are separate costs. Self-hosting also requires compute for the SFU and a separate Egress service. Check the current [LiveKit pricing](https://livekit.com/pricing) and [billing model](https://docs.livekit.io/deploy/admin/billing/) before enabling recording or inviting real users. Configure budget alerts and a strict retention period. No cost is incurred by the local generated demo feed.
+Start with `.env.example`. Important settings include `DEMO_MODE`, `DATABASE_URL`, `REDIS_URL`, `JWT_ACCESS_SECRET`, `WEB_PUSH_PUBLIC_KEY`, `WEB_PUSH_PRIVATE_KEY`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`, MinIO credentials, and `TURN_SHARED_SECRET`. Never commit `.env` files. `DEMO_MODE=true` is for local demonstrations only; it enables synthetic SOS and local video, and the dispatch control room remains labeled simulated.
 
-### Stream trigger and safeguards
+## Resource and cost notes
 
-The primary SOS starts the private room automatically. The installed PWA manifest includes a home-screen “Start emergency SOS” shortcut; supported mobile browsers can also enable the shake gesture from Settings after explicit motion permission. Twitch chat and channel point integration remain separate and are disabled unless `TWITCH_INTEGRATION_ENABLED=true`. Never present a simulated feed or dispatch action as a real emergency service connection.
+The stack has no required per-incident SaaS fee. Local use needs Docker-compatible compute and disk. Live video and recording consume network egress, CPU, and object storage; required capacity depends on concurrent rooms, bitrate, retention, and relay share. A small single-host demo is suitable for a handful of participants, not a production capacity claim. Measure the target deployment with the included load scripts before setting a user limit. Ongoing costs are the host, storage, bandwidth, power, and any domain/network equipment chosen by the operator.
 
-## Run tests and build
+## Responsible use
 
-```powershell
-npm --prefix backend test
-npm --prefix frontend test
-npm --prefix frontend run build
-```
-
-## Demo-only configuration
-
-`DEMO_MODE` is a backend environment variable; `VITE_DEMO_MODE` is a frontend build-time environment variable. Use `true` only for local or explicitly labelled judging demos. `FULE_DEMO_GUARDIAN_INVITE` seeds a hashed demo invite only while backend demo mode is enabled. Do not set this invite on public deployments. The demo data, coordinates, trigger sources, and responder profiles are fictional.
+FULE is a prototype and community response aid. It supplements, not replaces, emergency services (112). The simulated dispatch view does not contact authorities. Use consent-based access, keep precise location private, and do not treat generated triage as a verified fact.

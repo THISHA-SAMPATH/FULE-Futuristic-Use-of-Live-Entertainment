@@ -102,7 +102,6 @@ export class EvidenceVault {
         ...(incident.contacts_notified_at ? [{ at: incident.contacts_notified_at, event: 'TRUSTED_CONTACTS_NOTIFIED' }] : []),
         ...(incident.dispatch_record?.sent_at ? [{ at: incident.dispatch_record.sent_at, event: 'DISPATCH_SENT' }] : [])
       ].sort((a, b) => Date.parse(a.at) - Date.parse(b.at)),
-      clips: incident.clip_url ? [{ url: incident.clip_url, source: 'Twitch clip' }] : [],
       location_trail: walks.flatMap((walk) => walk.location_trail || []).sort((a, b) => Date.parse(a.at) - Date.parse(b.at)),
       evidence: evidence.map(({ chunk_id, sequence, recorded_at, sha256, previous_hash, chain_hash, metadata }) => ({ chunk_id, sequence, recorded_at, sha256, previous_hash, chain_hash, metadata, expired: expiredRecordings.has(chunk_id), download_path: `/api/incidents/${incident.incident_id}/evidence/${chunk_id}` })),
       integrity: { algorithm: 'SHA-256 hash chain', ...verification, files_valid: fileChecks.every(Boolean), files_checked: fileChecks.length, recordings_expired: expiredRecordings.size }

@@ -1,60 +1,26 @@
-# FULE production architecture
+# FULE architecture
 
 ```mermaid
-flowchart LR
-  Browser[React + Vite clients] -->|HTTPS / Socket.IO| LB[WebSocket-aware load balancer]
-  LB --> API1[Express API instance A]
-  LB --> API2[Express API instance N]
-  API1 --> PG[(PostgreSQL · Knex repository)]
-  API2 --> PG
-  API1 --> Redis[(Redis)]
-  API2 --> Redis
-  Redis --> Adapter[Socket.IO Redis adapter]
-  Redis --> Queue[BullMQ escalation + retention queues]
-  Queue --> Workers[Queue workers on API instances]
-  Queue --> WalkJobs[Safe-walk check-in + 60s timeout jobs]
-  Workers --> Walks[(PostgreSQL safe walks + location trail)]
-  Workers --> Push[Web Push · VAPID · generic prompt]
-  Push --> SW[Streamer service worker]
-  Guardians[Verified on-duty guardians] --> Duty[(Coarse duty locations · 15m freshness)]
-  API1 -->|approximate offer| Guardians
-  Guardians -->|accept · then exact details| API1
-  API1 --> Vault[Evidence vault storage adapter]
-  Vault --> Chain[(PostgreSQL SHA-256 append-only hash chain)]
-  Workers --> PG
-  API1 --> OpenAI[OpenAI structured synthesis]
-  API2 --> OpenAI
-  API1 --> Twitch[Twitch OAuth + EventSub + Helix]
-  API2 --> Twitch
-  PG --> Audit[(Audit events + retention cleanup)]
-  API1 --> Sentry[Sentry · optional]
-  API2 --> Sentry
-  API1 --> Metrics[Prometheus /metrics]
-  API2 --> Metrics
+flowchart TB
+  PWA[React PWA] -->|HTTPS / Socket.IO| API[Express API]
+  API --> PG[(PostgreSQL)]
+  API --> Redis[(Redis)]
+  Redis --> Jobs[BullMQ timers]
+  Redis --> Fanout[Socket.IO adapter]
+  API --> Rules[Rule triage engine]
+  API --> WebPush[Web Push]
+  PWA --> SFU[LiveKit SFU]
+  SFU --> TURN[coturn]
+  SFU --> Egress[LiveKit Egress]
+  API --> MinIO[(MinIO)]
+  Egress --> MinIO
+  API --> Dispatch[Simulated control room]
 ```
 
-## Safety workflow additions
+The backend validates all user input, creates a private incident, emits a redacted public notice and a full guardian-room notice, and schedules durable escalation work. PostgreSQL stores accounts, incidents, guardian approvals, audit events, and evidence-chain metadata. Redis carries socket fan-out, rate limits, and jobs. The file-backed demo path is available when external infrastructure is intentionally omitted.
 
-Safe-walk timers are BullMQ delayed jobs in Redis; durable walk state is in PostgreSQL and handlers re-check state/check-in sequence before acting. Local demo without Redis uses an atomic file-backed queue solely as an offline fallback. Missed-check-in notifications use VAPID Web Push when configured and contain no location; active-page demo falls back to the Socket.IO notice and browser notification. Nearby matching filters verified on-duty guardian locations no older than 15 minutes, bounding-box queries PostgreSQL and then calculates exact Haversine distances in the service; candidate location and exact incident coordinates are never in offer payloads. The exact SOS payload is sent to a nearby guardian only after an authenticated acceptance. Evidence metadata is hash chained under a locked PostgreSQL head row to serialize concurrent chunk appends. Chunk bytes currently use a filesystem adapter; production multi-instance deployments need a shared encrypted object-store adapter and durable volume configuration.
+Access tokens are short-lived; refresh credentials rotate and are stored as hashes. Roles are `user`, `guardian`, and `admin`. Guardian status is granted only after an administrator approves a pending request. Live media grants are signed for one incident and a specific participant role, with a short lifetime. Stream records go to object storage and their hashes are chained in append-only evidence metadata.
 
-## Data and trust boundaries
+Public incident payloads use coarse coordinates and omit transcripts/private response details. Exact coordinates and evidence are limited to verified responders and explicitly authorized contacts. User-initiated emergency calls use the device dialer; the dispatch console is a simulation.
 
-- `incidentRepository.js` is the storage seam. Production requires PostgreSQL; demo and tests can use the local JSON adapter. Knex applies versioned migrations at backend startup.
-- PostgreSQL is authoritative for incidents, trusted contacts, false-alarm counts, accounts, refresh tokens, idempotency records, and audit events. Redis coordinates shared limits, Socket.IO broadcasts, and durable delayed jobs.
-- BullMQ jobs use stable per-incident job IDs. Handlers re-check current incident state before sending trusted-contact or dispatch actions; a guardian acknowledgement/cancel removes delayed jobs when still pending.
-- `shared/incident.mjs` redacts exact coordinates and private details from public Socket.IO updates. Verified guardian room and dispatch-control access stay authenticated.
-- Email passwords use bcrypt; API access tokens are short-lived JWTs and refresh tokens are random, rotated, and stored as SHA-256 hashes. Guardian role is granted only after admin approval.
-- Twitch OAuth access/refresh credentials are AES-GCM encrypted in PostgreSQL when durable storage is active. Twitch session cookies are short-lived signed tokens. A Redis lease limits each broadcaster's EventSub socket to one API instance.
-- Local demo and tests remain explicitly non-production. Production boot fails without PostgreSQL, Redis, and a strong JWT secret.
-
-## Operational endpoints
-
-- `GET /api/health`: liveness.
-- `GET /api/ready`: PostgreSQL and Redis readiness.
-- `GET /metrics`: Prometheus counters, gauges, and histograms; protect with `METRICS_TOKEN` and network policy.
-- JSON request logs include an `x-request-id`; optional Sentry integration uses `SENTRY_DSN`.
-- Hourly queue job removes incidents, audit events, and idempotency records older than `INCIDENT_RETENTION_DAYS` (default 90) plus expired/revoked refresh tokens.
-
-## Known capacity controls
-
-PostgreSQL pool size is per instance (`PG_POOL_MAX`), so total configured pools must fit the database connection cap. PostgreSQL and Redis network round-trips, Twitch/OpenAI providers, signed dispatch webhook retries, Node CPU, and websocket egress are expected bottlenecks to quantify with the k6 harness. See [the measured load report](../LOAD_TEST_REPORT.md); blank results are intentionally not estimated.
+Production deployment requires a hardened host, TLS, durable backups, strong secrets, retention approval, firewall rules, and measured capacity. See [README](../README.md) for local configuration and resource notes.

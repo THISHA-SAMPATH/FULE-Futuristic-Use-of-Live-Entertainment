@@ -1,6 +1,6 @@
 export const INCIDENT_MODULES = Object.freeze(['FULE_PROTECT', 'FULE_ACCOUNT', 'FULE_RESPOND']);
 export const INCIDENT_MODULE = 'FULE_PROTECT';
-export const INCIDENT_SOURCES = Object.freeze(['button', 'chat', 'redeem']);
+export const INCIDENT_SOURCES = Object.freeze(['button', 'shake', 'keyboard']);
 export const THREAT_LEVELS = Object.freeze(['LOW', 'ELEVATED', 'HIGH', 'CRITICAL']);
 export const INCIDENT_STATUSES = Object.freeze([
   'PENDING_DISPATCH', 'DISPATCHING', 'ACKNOWLEDGED', 'CANCELLED', 'FALSE_ALARM', 'ESCALATED', 'RESOLVED'
@@ -13,7 +13,7 @@ export const INCIDENT_SCHEMA = Object.freeze({
   additionalProperties: false,
   required: [
     'incident_id', 'threat_level', 'module', 'location', 'summary',
-    'recommended_action', 'status', 'created_at', 'acknowledged_by', 'clip_url', 'stream_url', 'source', 'escalated', 'escalation_flag',
+    'recommended_action', 'status', 'created_at', 'acknowledged_by', 'stream_url', 'source', 'escalated', 'escalation_flag',
     'transcript_snippet', 'streamer_contact', 'guardian_responses', 'acknowledged_at', 'contacts_notified_at', 'dispatch_record', 'dispatch_stage', 'repeat_offender'
   ],
   properties: {
@@ -34,7 +34,6 @@ export const INCIDENT_SCHEMA = Object.freeze({
     status: { type: 'string', enum: [...INCIDENT_STATUSES] },
     created_at: { type: 'string' },
     acknowledged_by: { type: ['string', 'null'] },
-    clip_url: { type: ['string', 'null'] },
     stream_url: { type: ['string', 'null'] },
     source: { type: 'string', enum: [...INCIDENT_SOURCES] },
     escalated: { type: 'boolean' },
@@ -60,7 +59,6 @@ export function createIncident({
   status = 'ACTIVE',
   created_at = new Date().toISOString(),
   acknowledged_by = null,
-  clip_url = null,
   stream_url = null,
   source = 'button',
   escalated = false,
@@ -94,7 +92,6 @@ export function createIncident({
     status: safeStatus,
     created_at: created_at || new Date().toISOString(),
     acknowledged_by: acknowledged_by == null ? null : String(acknowledged_by).slice(0, 120),
-    clip_url: typeof clip_url === 'string' && clip_url ? clip_url.slice(0, 1000) : null,
     stream_url: typeof stream_url === 'string' && stream_url ? stream_url.slice(0, 1000) : null,
     source: safeSource,
     escalated: Boolean(escalated),
@@ -103,7 +100,6 @@ export function createIncident({
     streamer_contact: streamer_contact && typeof streamer_contact === 'object' ? {
       streamer_id: String(streamer_contact.streamer_id || '').slice(0, 128),
       display_name: String(streamer_contact.display_name || 'Streamer').slice(0, 120),
-      twitch_login: String(streamer_contact.twitch_login || '').slice(0, 50)
     } : null,
     guardian_responses: Array.isArray(guardian_responses) ? guardian_responses.slice(0, 20).map((response) => ({ guardian_id: String(response.guardian_id || '').slice(0, 120), at: String(response.at || ''), action: String(response.action || '').slice(0, 40) })) : [],
     acknowledged_at: acknowledged_at == null ? null : String(acknowledged_at),
@@ -134,7 +130,6 @@ export function toPublicIncident(incident) {
     summary: 'Safety incident in progress. Precise location and live details are restricted to guardians.',
     recommended_action: 'Await guardian response',
     acknowledged_by: null,
-    clip_url: null,
     stream_url: null,
     escalation_flag: incident.escalation_flag,
     transcript_snippet: '', streamer_contact: null, guardian_responses: [], acknowledged_at: null,
@@ -157,7 +152,6 @@ export function isIncident(value) {
     && INCIDENT_STATUSES.includes(value.status)
     && typeof value.created_at === 'string'
     && (typeof value.acknowledged_by === 'string' || value.acknowledged_by === null)
-    && (typeof value.clip_url === 'string' || value.clip_url === null)
     && (typeof value.stream_url === 'string' || value.stream_url === null)
     && INCIDENT_SOURCES.includes(value.source)
     && typeof value.escalated === 'boolean'

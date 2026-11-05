@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { motion, useReducedMotion } from 'framer-motion';
 import { ArrowLeft, ArrowRight, Eye, PhoneCall, Radio, ShieldCheck, UsersRound } from 'lucide-react';
-import { twitchPlayerUrl } from '../streamAccess.js';
 import { STREAM_ARTWORK } from '../streamArtwork.js';
 
 function Artwork({ scene = 'violet' }) {
@@ -9,9 +8,8 @@ function Artwork({ scene = 'violet' }) {
 }
 
 function FeaturedPlayer({ stream, demoMode, active }) {
-  const player = stream?.stream_url ? twitchPlayerUrl(stream.stream_url, window.location.hostname) : null;
   return <div className="carousel-feature">
-    <div className="carousel-media">{player ? <iframe src={player} title="Featured Twitch safety stream" allow="autoplay; fullscreen" allowFullScreen/> : demoMode ? <Artwork scene={stream?.scene}/> : <div className="featured-empty"><Radio size={25}/><strong>No featured stream</strong><span>Verified community streams appear here.</span></div>}
+    <div className="carousel-media">{demoMode ? <Artwork scene={stream?.scene}/> : <div className="featured-empty"><Radio size={25}/><strong>No featured stream</strong><span>Private live rooms appear here after an incident starts.</span></div>}
       <div className="carousel-media-top"><span className="carousel-live"><i/>{active ? 'EMERGENCY' : 'LIVE'}</span><span className="carousel-area">{active ? 'Private circle' : stream?.region || 'Area shared privately'}</span></div>
       {active && <div className="emergency-overlay" role="status" aria-live="polite"><span className="emergency-beacon"/><strong>EMERGENCY</strong><span>Guardians have been notified</span></div>}
     </div>

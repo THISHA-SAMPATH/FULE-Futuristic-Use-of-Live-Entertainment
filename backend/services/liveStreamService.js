@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, createHmac } from 'node:crypto';
 import { AccessToken, EgressClient, EncodedFileOutput, RoomServiceClient, S3Upload, WebhookReceiver } from 'livekit-server-sdk';
 import { S3Client, GetObjectCommand } from '@aws-sdk/client-s3';
 
@@ -23,7 +23,7 @@ export class LiveStreamService {
     this.recordingEntries = new Map();
   }
   get configured() { return Boolean(this.env.LIVEKIT_URL && this.env.LIVEKIT_API_KEY && this.env.LIVEKIT_API_SECRET); }
-  get recordingConfigured() { return Boolean(this.configured && this.env.LIVEKIT_WEBHOOK_URL && this.env.LIVEKIT_EGRESS_S3_BUCKET && this.env.AWS_ACCESS_KEY_ID && this.env.AWS_SECRET_ACCESS_KEY && this.evidenceVault); }
+  get recordingConfigured() { return Boolean(this.configured && this.env.LIVEKIT_WEBHOOK_URL && this.env.LIVEKIT_EGRESS_S3_BUCKET && this.env.AWS_ACCESS_KEY_ID && this.env.AWS_SECRET_ACCESS_KEY && this.env.AWS_S3_ENDPOINT && this.evidenceVault); }
   get demoMode() { return this.env.DEMO_MODE === 'true'; }
   roomName(incidentId) { return `fule-${createHash('sha256').update(incidentId).digest('hex').slice(0, 32)}`; }
 
@@ -49,7 +49,17 @@ export class LiveStreamService {
       try { await this.startRecording(incident.incident_id, room); recordingEnabled = true; }
       catch { recordingEnabled = false; }
     }
-    return { mode: 'livekit', simulated: false, recording_enabled: recordingEnabled, room, source: null, expires_at: new Date(this.now() + ttlSeconds * 1000).toISOString(), token, server_url: this.websocketUrl, can_publish: role === 'streamer', can_subscribe: role !== 'streamer' };
+    const turn = this.turnCredentials(principal, role, ttlSeconds);
+    return { mode: 'livekit', simulated: false, recording_enabled: recordingEnabled, room, source: null, expires_at: new Date(this.now() + ttlSeconds * 1000).toISOString(), token, server_url: this.websocketUrl, ice_servers: turn, can_publish: role === 'streamer', can_subscribe: role !== 'streamer' };
+  }
+
+  turnCredentials(principal, role, ttlSeconds) {
+    const urls = String(this.env.LIVEKIT_TURN_URL || '').split(',').map((url) => url.trim()).filter(Boolean);
+    const secret = String(this.env.TURN_SHARED_SECRET || '');
+    if (!urls.length || !secret) return undefined;
+    const username = `${Math.floor(this.now() / 1000) + ttlSeconds}:${role}:${String(principal.id).replace(/[^\w.-]/g, '').slice(0, 80)}`;
+    const credential = createHmac('sha1', secret).update(username).digest('base64');
+    return { iceServers: [{ urls, username, credential }] };
   }
 
   async ensureRoom(room) {
@@ -116,7 +126,8 @@ export class LiveStreamService {
       else for await (const chunk of body) { hash.update(chunk); bytes += chunk.length; }
       return { sha256: hash.digest('hex'), bytes };
     }
-    const client = new S3Client({ region: this.env.AWS_REGION || 'us-east-1', endpoint: this.env.AWS_S3_ENDPOINT || undefined, forcePathStyle: this.env.AWS_S3_FORCE_PATH_STYLE === 'true', credentials: { accessKeyId: this.env.AWS_ACCESS_KEY_ID, secretAccessKey: this.env.AWS_SECRET_ACCESS_KEY } });
+    if (!this.env.AWS_S3_ENDPOINT) throw new Error('Self-hosted object storage endpoint is required.');
+    const client = new S3Client({ region: this.env.AWS_REGION || 'us-east-1', endpoint: this.env.AWS_S3_ENDPOINT, forcePathStyle: this.env.AWS_S3_FORCE_PATH_STYLE === 'true', credentials: { accessKeyId: this.env.AWS_ACCESS_KEY_ID, secretAccessKey: this.env.AWS_SECRET_ACCESS_KEY } });
     const response = await client.send(new GetObjectCommand({ Bucket: bucket, Key: key }));
     const digest = createHash('sha256'); let bytes = 0;
     for await (const chunk of response.Body) { digest.update(chunk); bytes += chunk.length; }
@@ -130,8 +141,9 @@ export class LiveStreamService {
     for (const entry of expired) {
       if (deleteObject || this.s3ObjectDeleter) await (deleteObject || this.s3ObjectDeleter)(entry.metadata.s3_bucket, entry.metadata.s3_key);
       else {
+        if (!this.env.AWS_S3_ENDPOINT) throw new Error('Self-hosted object storage endpoint is required for retention cleanup.');
         const { S3Client, DeleteObjectCommand } = await import('@aws-sdk/client-s3');
-        const client = new S3Client({ region: this.env.AWS_REGION || 'us-east-1', endpoint: this.env.AWS_S3_ENDPOINT || undefined, forcePathStyle: this.env.AWS_S3_FORCE_PATH_STYLE === 'true', credentials: { accessKeyId: this.env.AWS_ACCESS_KEY_ID, secretAccessKey: this.env.AWS_SECRET_ACCESS_KEY } });
+        const client = new S3Client({ region: this.env.AWS_REGION || 'us-east-1', endpoint: this.env.AWS_S3_ENDPOINT, forcePathStyle: this.env.AWS_S3_FORCE_PATH_STYLE === 'true', credentials: { accessKeyId: this.env.AWS_ACCESS_KEY_ID, secretAccessKey: this.env.AWS_SECRET_ACCESS_KEY } });
         await client.send(new DeleteObjectCommand({ Bucket: entry.metadata.s3_bucket, Key: entry.metadata.s3_key }));
       }
       await this.evidenceVault.appendRetentionTombstone(entry, new Date(now).toISOString());

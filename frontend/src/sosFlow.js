@@ -1,4 +1,4 @@
-export const DEMO_STREAMER = Object.freeze({ id: 'demo-streamer', login: 'Demo Streamer' });
+export const DEMO_STREAMER = Object.freeze({ id: 'demo-streamer', display_name: 'Demo Streamer' });
 export const DEMO_LOCATION = Object.freeze({ lat: 0.001, lng: 0.001 });
 
 // React supplies a click event to onClick callbacks. This adapter deliberately
@@ -25,12 +25,13 @@ export async function submitSos({
   fetchImpl = fetch,
   apiUrl,
   accessToken = '',
-  source = 'button',
-  transcript = ''
+    source = 'button',
+  transcript = '',
+  riskLevel = 'standard'
 }) {
   if (!demoMode && !user) {
-    const error = new Error('Sign in with a FULE account or connect Twitch before starting SOS.');
-    error.code = 'TWITCH_LOGIN_REQUIRED';
+    const error = new Error('Sign in with your FULE account before starting SOS.');
+    error.code = 'ACCOUNT_LOGIN_REQUIRED';
     throw error;
   }
 
@@ -52,7 +53,8 @@ export async function submitSos({
       location,
       module_type: 'FULE_PROTECT',
       audio_transcript_snippet: transcript,
-      source
+      source,
+      risk_level: riskLevel
     })
   });
   const result = await response.json();

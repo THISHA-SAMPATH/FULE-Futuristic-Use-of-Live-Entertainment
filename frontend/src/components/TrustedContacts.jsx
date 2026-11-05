@@ -5,7 +5,7 @@ import { API_URL } from '../config.js';
 export default function TrustedContacts({ streamerId, connected, accessToken = '', demoMode = false, id = 'trusted-circle', compact = false }) {
   const [contacts, setContacts] = useState([]);
   const [name, setName] = useState('');
-  const [phone, setPhone] = useState('');
+  const [email, setEmail] = useState('');
   const [message, setMessage] = useState('');
   const [saving, setSaving] = useState(false);
   useEffect(() => {
@@ -31,14 +31,14 @@ export default function TrustedContacts({ streamerId, connected, accessToken = '
   async function add(event) {
     event.preventDefault();
     if (contacts.length >= 3) { setMessage('The maximum is three contacts.'); return; }
-    const next = [...contacts, { name: name.trim(), phone: phone.trim() }];
-    await save(next); setName(''); setPhone('');
+    const next = [...contacts, { name: name.trim(), email: email.trim().toLowerCase() }];
+    await save(next); setName(''); setEmail('');
   }
   return <details className={`trusted-contacts ${compact ? 'is-compact' : ''}`} id={id} open={compact || undefined}><summary>Trusted Contacts <span>{contacts.length}/3 · alerted after 30s without guardian acknowledgement</span></summary>
-    {!connected && !demoMode ? <p className="trusted-contact-hint">Sign in with a FULE account or connect Twitch to manage your private trusted contacts.</p> : <>
-      <p className="trusted-contact-hint">Their name and phone number stay server-side. FULE sends them an alert if guardians have not acknowledged in 30 seconds.</p>
-      <ul>{contacts.map((contact, index) => <li key={`${contact.phone}-${index}`}><span><strong>{contact.name}</strong><small>{contact.phone}</small></span><button type="button" aria-label={`Remove ${contact.name}`} disabled={saving} onClick={() => save(contacts.filter((_, itemIndex) => itemIndex !== index))}><X size={15}/></button></li>)}</ul>
-      {contacts.length < 3 && <form onSubmit={add}><label>Name<input value={name} onChange={(event) => setName(event.target.value)} maxLength={80} required/></label><label>Phone in international format<input type="tel" value={phone} onChange={(event) => setPhone(event.target.value)} placeholder="+14155550123" pattern="\+[1-9]\d{7,14}" required/></label><button type="submit" disabled={saving}><UserPlus size={15}/>{saving ? 'Saving…' : 'Add trusted contact'}</button></form>}
+    {!connected && !demoMode ? <p className="trusted-contact-hint">Sign in with a FULE account to manage your private trusted circle.</p> : <>
+      <p className="trusted-contact-hint">Trusted members must have a FULE account and enable Web Push to receive escalation notifications.</p>
+      <ul>{contacts.map((contact, index) => <li key={`${contact.email}-${index}`}><span><strong>{contact.name}</strong><small>{contact.email}</small></span><button type="button" aria-label={`Remove ${contact.name}`} disabled={saving} onClick={() => save(contacts.filter((_, itemIndex) => index !== itemIndex))}><X size={15}/></button></li>)}</ul>
+      {contacts.length < 3 && <form onSubmit={add}><label>Name<input value={name} onChange={(event) => setName(event.target.value)} maxLength={80} required/></label><label>FULE account email<input type="email" value={email} onChange={(event) => setEmail(event.target.value)} required/></label><button type="submit" disabled={saving}><UserPlus size={15}/>{saving ? 'Saving…' : 'Add trusted contact'}</button></form>}
     </>}{message && <p className="trusted-contact-message" role="status">{message}</p>}
   </details>;
 }

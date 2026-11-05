@@ -4,7 +4,7 @@ services:
     environment:
       POSTGRES_DB: fule
       POSTGRES_USER: fule
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in the root .env file}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Copy .env.example to .env and set secrets}
     volumes: [fule-postgres:/var/lib/postgresql/data]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U fule -d fule"]
@@ -20,6 +20,82 @@ services:
       interval: 5s
       timeout: 3s
       retries: 20
+  minio:
+    image: minio/minio:latest
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?Set MINIO_ROOT_USER in .env}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?Set MINIO_ROOT_PASSWORD in .env}
+    ports: ["9000:9000", "9001:9001"]
+    volumes: [fule-objects:/data]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/ready"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+  minio-init:
+    image: minio/mc:latest
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?Set MINIO_ROOT_USER in .env}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?Set MINIO_ROOT_PASSWORD in .env}
+    depends_on:
+      minio: { condition: service_healthy }
+    entrypoint: ["/bin/sh", "-c"]
+    command: ["until mc alias set local http://minio:9000 \"$MINIO_ROOT_USER\" \"$MINIO_ROOT_PASSWORD\"; do sleep 1; done; mc mb --ignore-existing local/fule-evidence"]
+  livekit:
+    image: livekit/livekit-server:latest
+    environment:
+      LIVEKIT_CONFIG: |
+        port: 7880
+        log_level: info
+        rtc:
+          tcp_port: 7881
+          port_range_start: 50000
+          port_range_end: 50100
+          use_external_ip: false
+        redis:
+          address: redis:6379
+        keys:
+          ${LIVEKIT_API_KEY:?Set LIVEKIT_API_KEY in .env}: ${LIVEKIT_API_SECRET:?Set LIVEKIT_API_SECRET in .env}
+    ports: ["7880:7880/tcp", "7881:7881/tcp", "50000-50100:50000-50100/udp"]
+    depends_on:
+      redis: { condition: service_healthy }
+      coturn: { condition: service_started }
+  livekit-egress:
+    image: livekit/egress:latest
+    environment:
+      EGRESS_CONFIG_BODY: |
+        api_key: ${LIVEKIT_API_KEY:?Set LIVEKIT_API_KEY in .env}
+        api_secret: ${LIVEKIT_API_SECRET:?Set LIVEKIT_API_SECRET in .env}
+        ws_url: ws://livekit:7880
+        insecure: true
+        redis:
+          address: redis:6379
+        s3:
+          access_key: ${AWS_ACCESS_KEY_ID:?Set object-store access key in .env}
+          secret: ${AWS_SECRET_ACCESS_KEY:?Set object-store secret in .env}
+          region: ${AWS_REGION:-us-east-1}
+          endpoint: http://minio:9000
+          bucket: ${LIVEKIT_EGRESS_S3_BUCKET:-fule-evidence}
+          force_path_style: true
+    depends_on: [livekit, redis, minio-init]
+  coturn:
+    image: coturn/coturn:4.6-alpine
+    command:
+      - -n
+      - --log-file=stdout
+      - --listening-port=3478
+      - --realm=fule.local
+      - --use-auth-secret
+      - --static-auth-secret=${TURN_SHARED_SECRET:?Set TURN_SHARED_SECRET in .env}
+      - --fingerprint
+      - --no-cli
+      - --no-tls
+      - --no-dtls
+      - --min-port=49160
+      - --max-port=49200
+      - --external-ip=${TURN_EXTERNAL_IP:-127.0.0.1}
+    ports: ["3478:3478/udp", "3478:3478/tcp", "49160-49200:49160-49200/udp"]
   backend:
     build:
       context: .
@@ -28,48 +104,42 @@ services:
       NODE_ENV: development
       DEMO_MODE: ${DEMO_MODE:-true}
       PORT: 4000
-      DATABASE_URL: postgres://fule:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in the root .env file}@postgres:5432/fule
+      DATABASE_URL: postgres://fule:${POSTGRES_PASSWORD}@postgres:5432/fule
       REDIS_URL: redis://redis:6379
-      FRONTEND_ORIGIN: http://localhost:4173
-      JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:?Set JWT_ACCESS_SECRET in the root .env file}
-      METRICS_TOKEN: ${METRICS_TOKEN:?Set METRICS_TOKEN in the root .env file}
+      FRONTEND_ORIGIN: ${FRONTEND_ORIGIN:-http://localhost:4173}
+      JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:?Set JWT_ACCESS_SECRET in .env}
+      METRICS_TOKEN: ${METRICS_TOKEN:?Set METRICS_TOKEN in .env}
+      SAFE_WALK_PIN_PEPPER: ${SAFE_WALK_PIN_PEPPER:?Set SAFE_WALK_PIN_PEPPER in .env}
+      EVIDENCE_ENCRYPTION_KEY: ${EVIDENCE_ENCRYPTION_KEY:-}
       INCIDENT_RETENTION_DAYS: ${INCIDENT_RETENTION_DAYS:-90}
-      FULE_DEMO_GUARDIAN_INVITE: ${FULE_DEMO_GUARDIAN_INVITE:?Set FULE_DEMO_GUARDIAN_INVITE in the root .env file}
-      FULE_LOAD_TEST_TOKEN: ${FULE_LOAD_TEST_TOKEN:-}
-      FULE_SOS_IP_LIMIT: ${FULE_SOS_IP_LIMIT:-6}
-      FULE_API_IP_LIMIT: ${FULE_API_IP_LIMIT:-180}
-      TWITCH_INTEGRATION_ENABLED: ${TWITCH_INTEGRATION_ENABLED:-false}
-      TWITCH_CLIENT_ID: ${TWITCH_CLIENT_ID:-}
-      TWITCH_CLIENT_SECRET: ${TWITCH_CLIENT_SECRET:-}
-      TWITCH_REDIRECT_URI: ${TWITCH_REDIRECT_URI:-http://localhost:4000/auth/twitch/callback}
-      LIVEKIT_URL: ${LIVEKIT_URL:-}
-      LIVEKIT_API_KEY: ${LIVEKIT_API_KEY:-}
-      LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET:-}
-      LIVEKIT_TOKEN_TTL_SECONDS: ${LIVEKIT_TOKEN_TTL_SECONDS:-180}
-      LIVEKIT_MAX_PARTICIPANTS: ${LIVEKIT_MAX_PARTICIPANTS:-12}
-      LIVEKIT_WEBHOOK_URL: ${LIVEKIT_WEBHOOK_URL:-}
-      LIVEKIT_EGRESS_S3_BUCKET: ${LIVEKIT_EGRESS_S3_BUCKET:-}
-      LIVEKIT_EGRESS_PREFIX: ${LIVEKIT_EGRESS_PREFIX:-fule-evidence}
-      LIVEKIT_RECORDING_RETENTION_DAYS: ${LIVEKIT_RECORDING_RETENTION_DAYS:-30}
-      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
-      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
-      AWS_REGION: ${AWS_REGION:-us-east-1}
-      AWS_S3_ENDPOINT: ${AWS_S3_ENDPOINT:-}
-      AWS_S3_FORCE_PATH_STYLE: ${AWS_S3_FORCE_PATH_STYLE:-false}
-      SAFE_WALK_PIN_PEPPER: ${SAFE_WALK_PIN_PEPPER:?Set SAFE_WALK_PIN_PEPPER in the root .env file}
       WEB_PUSH_PUBLIC_KEY: ${WEB_PUSH_PUBLIC_KEY:-}
       WEB_PUSH_PRIVATE_KEY: ${WEB_PUSH_PRIVATE_KEY:-}
-      WEB_PUSH_SUBJECT: ${WEB_PUSH_SUBJECT:-mailto:security@fule.app}
-      NEARBY_GUARDIAN_RADIUS_METERS: ${NEARBY_GUARDIAN_RADIUS_METERS:-400}
-      NEARBY_GUARDIAN_OFFER_LIMIT: ${NEARBY_GUARDIAN_OFFER_LIMIT:-10}
-      NEARBY_GUARDIAN_ACCEPT_CAP: ${NEARBY_GUARDIAN_ACCEPT_CAP:-5}
+      WEB_PUSH_SUBJECT: ${WEB_PUSH_SUBJECT:-mailto:security@fule.local}
+      LIVEKIT_URL: ${LIVEKIT_PUBLIC_URL:-ws://localhost:7880}
+      LIVEKIT_API_URL: http://livekit:7880
+      LIVEKIT_API_KEY: ${LIVEKIT_API_KEY}
+      LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET}
+      LIVEKIT_TOKEN_TTL_SECONDS: ${LIVEKIT_TOKEN_TTL_SECONDS:-180}
+      LIVEKIT_MAX_PARTICIPANTS: ${LIVEKIT_MAX_PARTICIPANTS:-12}
+      LIVEKIT_WEBHOOK_URL: http://backend:4000/api/livekit/webhook
+      LIVEKIT_EGRESS_S3_BUCKET: ${LIVEKIT_EGRESS_S3_BUCKET:-fule-evidence}
+      LIVEKIT_EGRESS_PREFIX: ${LIVEKIT_EGRESS_PREFIX:-fule-evidence}
+      LIVEKIT_RECORDING_RETENTION_DAYS: ${LIVEKIT_RECORDING_RETENTION_DAYS:-30}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+      AWS_REGION: ${AWS_REGION:-us-east-1}
+      AWS_S3_ENDPOINT: http://minio:9000
+      AWS_S3_FORCE_PATH_STYLE: "true"
+      LIVEKIT_TURN_URL: ${LIVEKIT_TURN_URL:-turn:localhost:3478?transport=udp}
+      TURN_SHARED_SECRET: ${TURN_SHARED_SECRET}
       EVIDENCE_STORAGE_DIR: /app/backend/data/evidence
-      EVIDENCE_ENCRYPTION_KEY: ${EVIDENCE_ENCRYPTION_KEY:-}
     ports: ["4000:4000"]
     volumes: [fule-evidence:/app/backend/data/evidence]
     depends_on:
       postgres: { condition: service_healthy }
       redis: { condition: service_healthy }
+      minio-init: { condition: service_completed_successfully }
+      livekit-egress: { condition: service_started }
   frontend:
     build:
       context: ./frontend
@@ -81,4 +151,5 @@ services:
 volumes:
   fule-postgres:
   fule-redis:
+  fule-objects:
   fule-evidence:

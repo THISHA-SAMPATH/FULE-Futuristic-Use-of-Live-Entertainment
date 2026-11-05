@@ -37,7 +37,7 @@
     "logical_cpu_count": 4
   },
   "limitations": [
-    "This run does not use PostgreSQL, Redis, multiple API instances, TLS, Twitch, or a dispatch provider.",
+    "This historical run used one process and did not use the self-hosted PostgreSQL, Redis, or media stack.",
     "CPU and memory values are from the backend process Prometheus metrics; host, Postgres, and Redis resource use are not included."
   ]
 }

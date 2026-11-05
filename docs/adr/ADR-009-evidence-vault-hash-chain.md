@@ -1,9 +1,13 @@
-# ADR-009: Evidence vault and append-only SHA-256 chain
+# ADR-009: Tamper-evident evidence
 
 ## Decision
 
-Upload bounded 10-second browser-recorded audio/video chunks after permission. Hash the raw bytes with SHA-256, store bytes through an evidence storage adapter, and append metadata to a per-incident chain inside a PostgreSQL transaction that locks the chain head. A case-file export includes the incident, response timeline, Twitch clip links, safe-walk location trail, evidence hashes/download paths, chain verification, and an independent hash check of stored chunk bytes.
+Store bounded evidence chunks in encrypted local storage or the configured object store. Hash each item with SHA-256 and append metadata to a per-incident hash chain. Case files include a chain verification result.
+
+## Rationale
+
+The integrity chain makes accidental changes detectable without representing that FULE proves the truth of recorded content.
 
 ## Consequences
 
-The local adapter is a filesystem implementation and supports one host only. Production horizontal scaling requires a shared, encrypted object store and key management before deployment. Chunks are size and MIME-type limited and protected by streamer session capability on upload; downloads and case files require verified guardian/admin access. Incident retention deletes chunk metadata and files together.
+Operators must secure the encryption key and object store, define retention, and ensure each deployed instance can reach the same durable evidence storage.

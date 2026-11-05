@@ -1,52 +1,21 @@
-# Deployment
+# Self-host deployment guide
 
-## Required production services
+FULE is intended to run on infrastructure you control. The local Compose definition is the reference stack; it starts the PWA, API, PostgreSQL, Redis, MinIO, LiveKit, Egress, and coturn.
 
-- Node.js 22 backend container with a writable temporary directory only.
-- Managed PostgreSQL (`DATABASE_URL`) and Redis (`REDIS_URL`) with private networking, TLS where supported, backups, and monitoring.
-- One exact HTTPS frontend origin in `FRONTEND_ORIGIN`.
-- Secret manager values for `JWT_ACCESS_SECRET`, Twitch credentials, OpenAI, dispatch/Twilio integrations, `METRICS_TOKEN`, and optional `SENTRY_DSN`.
-- `SAFE_WALK_PIN_PEPPER` and `EVIDENCE_ENCRYPTION_KEY` (base64-encoded 32 random bytes) must be stable secrets; production requires the evidence key.
-- For background safe-walk notifications, configure `WEB_PUSH_PUBLIC_KEY`, `WEB_PUSH_PRIVATE_KEY`, and `WEB_PUSH_SUBJECT` from generated VAPID credentials; keep the private key in the secret manager.
+## Host preparation
 
-Do not enable `DEMO_MODE` on a public deployment. Do not set `FULE_DEMO_GUARDIAN_INVITE` or `FULE_LOAD_TEST_TOKEN` outside local demos/tests. Create the first admin with the one-time operational command `npm --prefix backend run create:admin`, then remove the bootstrap credential from the runtime environment. Admin access is needed to approve guardian accounts.
+1. Install Docker Engine and Compose plugin on a supported Linux host.
+2. Clone the repository, copy `.env.example` to `.env`, and generate unique values for every secret.
+3. Set `FRONTEND_ORIGIN` to the exact HTTPS origin served by your reverse proxy. Keep the database, Redis, object console, SFU control port, and coturn admin surface off the public internet.
+4. Configure TLS at the reverse proxy. Publish only the frontend/API plus the required WebRTC signaling and media ports.
+5. Set `TURN_EXTERNAL_IP` to the public address and `LIVEKIT_TURN_URL` to the corresponding reachable relay endpoint. Open the LiveKit UDP media range and coturn relay range in the host firewall.
+6. Set durable Docker volumes, backups, incident retention, and recording retention before onboarding real users.
+7. Start with `docker compose up --build`; the backend applies migrations before it accepts traffic. Check `/api/health`, `/api/ready`, and protected `/metrics`.
+8. Create an administrator account with `ADMIN_EMAIL`, `ADMIN_PASSWORD`, and `DATABASE_URL` set in the backend environment, then run `npm --prefix backend run create:admin` from the project checkout.
+9. Generate VAPID keys locally and configure them on the backend. Confirm browser permissions and delivery in the target browsers.
 
-## Build and run
+## Operational boundaries
 
-The repository includes `backend/Dockerfile`, `frontend/Dockerfile`, and `docker-compose.yml` for local development. Production platforms should build those images and inject runtime values. Backend startup runs Knex migrations; deploys should first take a PostgreSQL backup and canary the new image before shifting all traffic.
+Demo mode uses generated video, synthetic coordinates, and an internal dispatch simulation. Disable demo mode for account-based deployment. The dispatch console never contacts an authority. A user can choose the direct `tel:112` link on their own device.
 
-Set `FRONTEND_ORIGIN=https://<frontend-domain>` exactly, and add the exact Twitch OAuth redirect URL `https://<api-domain>/auth/twitch/callback` in the Twitch Developer Console. Vercel frontend build values are `VITE_API_URL=https://<api-domain>` and `VITE_DEMO_MODE=false`; `VITE_` values are public.
-
-Set `DATABASE_URL` and `REDIS_URL` to managed services. Production intentionally fails at startup if either is absent. Configure PostgreSQL connection pool size for the service's connection budget (`PG_POOL_MAX`), and retain PostgreSQL connections below the database limit across all app instances. Redis must be shared by API instances to coordinate rate limits, socket fan-out, BullMQ work, and broadcaster EventSub ownership. If Twitch integration is enabled, generate and set `TWITCH_TOKEN_ENCRYPTION_KEY` as 32 random bytes encoded in Base64.
-
-Safe-walk scheduling uses BullMQ/Redis in production. Nearby matching uses the configured radius and acceptance cap; duty locations expire from matching after 15 minutes. Evidence chunks are AES-256-GCM encrypted at rest. The current storage adapter writes files under `EVIDENCE_STORAGE_DIR`; mount that directory on durable shared storage or replace the adapter with encrypted object storage before running multiple API instances. Safe-walk records and evidence metadata follow `INCIDENT_RETENTION_DAYS` and are removed by the hourly cleanup job.
-
-## Health, scaling, and retention
-
-- Liveness: `GET /api/health`.
-- Readiness: `GET /api/ready` checks PostgreSQL and Redis.
-- Metrics: `GET /metrics`, protected by `Authorization: Bearer $METRICS_TOKEN`.
-- Use a load balancer with WebSocket upgrade support and sticky sessions if using Socket.IO long-polling fallback. WebSocket-only operation avoids polling affinity requirements.
-- Configure `INCIDENT_RETENTION_DAYS` to match the approved data policy. The hourly BullMQ cleanup removes expired incidents, audit events, idempotency keys, and expired/revoked refresh tokens.
-- Configure Sentry with `SENTRY_DSN`; tune sampling with `SENTRY_TRACES_SAMPLE_RATE`.
-- Terminate TLS at the managed ingress. Set `TRUST_PROXY_HOPS` only to the exact number of trusted reverse-proxy hops in front of the API; do not enable blanket proxy trust. Restrict PostgreSQL, Redis, and `/metrics` to private networks.
-
-## Migrating the old local SQLite file
-
-Back up the old SQLite database. With `DATABASE_URL` set in `backend/.env`, run:
-
-```powershell
-npm --prefix backend run migrate:sqlite -- "backend/data/incidents.sqlite"
-```
-
-The import copies incident payloads, trusted contacts, false-alarm counts, and the adjacent `audit.jsonl` if present. Verify row counts and representative privacy fields before retiring the source file. The migration does not delete or modify the SQLite source.
-
-## Local services
-
-```powershell
-Copy-Item .env.example .env
-Copy-Item .env.example backend/.env
-docker compose up --build
-```
-
-The local Compose environment is explicitly a demo setup. It uses local-only credentials and simulated dispatch. Replace every placeholder before deploying anything reachable from the public internet.
+No public URL, performance number, concurrency limit, or emergency-response guarantee is implied by this repository. Benchmark the exact host/network configuration, inspect logs/metrics, and validate backup restore before production use.

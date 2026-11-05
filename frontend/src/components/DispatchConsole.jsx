@@ -1,10 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
 import { io } from 'socket.io-client';
-import { Activity, ArrowLeft, BadgeCheck, Check, Clock3, MapPin, Radio, ShieldAlert, Siren, TriangleAlert, Truck } from 'lucide-react';
+import { Activity, ArrowLeft, Check, Clock3, MapPin, Radio, ShieldAlert, Siren, TriangleAlert, Truck } from 'lucide-react';
 import { API_URL } from '../config.js';
-import { twitchPlayerUrl } from '../streamAccess.js';
 
-const TOKEN_KEY = 'fuleGuardianToken';
+const TOKEN_KEY = 'fuleAccessToken';
 const activeDispatch = (incident) => incident?.dispatch_record && !['RESOLVED', 'STAND_DOWN'].includes(incident.dispatch_stage);
 
 export default function DispatchConsole() {
@@ -25,7 +24,7 @@ export default function DispatchConsole() {
       if (!response.ok) throw new Error(data.error || 'Could not load dispatch queue.');
       setIncidents(data.incidents || []); setError('');
     }).catch((requestError) => setError(requestError.message)).finally(() => setLoading(false));
-    const socket = io(API_URL, { transports: ['websocket', 'polling'], auth: { guardianToken: token } });
+    const socket = io(API_URL, { transports: ['websocket', 'polling'], auth: { accessToken: token } });
     socket.on('connect', () => setConnection('online'));
     socket.on('disconnect', () => setConnection('offline'));
     socket.on('connect_error', () => setConnection('offline'));
@@ -59,22 +58,20 @@ export default function DispatchConsole() {
 
   return <main className="dispatch-console" data-demo={demoMode}>
     <header className="dispatch-topbar"><a href="/" className="dispatch-back"><ArrowLeft size={16}/>FULE Network</a><div className="dispatch-title"><span className="dispatch-live"><i/>CONTROL ROOM LIVE</span><h1>Emergency Dispatch</h1></div><span className="dispatch-connection"><i className={connection === 'online' ? 'on' : ''}/>{connection}</span></header>
-    <div className="dispatch-warning"><ShieldAlert size={16}/><strong>{demoMode ? 'SIMULATED DISPATCH' : 'AUTHORIZED DISPATCH VIEW'}</strong><span>{demoMode ? 'Demo only · no emergency authority is contacted.' : 'Incident details are restricted to verified responders.'}</span></div>
+    <div className="dispatch-warning"><ShieldAlert size={16}/><strong>SIMULATED DISPATCH</strong><span>Internal training view only · no emergency authority is contacted. Call 112 directly when immediate help is needed.</span></div>
     {error && <div className="dispatch-error" role="alert"><TriangleAlert size={16}/>{error}</div>}
     <section className="dispatch-queue-heading"><div><span>LIVE INCIDENT QUEUE</span><h2>Incoming reports <b>{queue.length}</b></h2></div><span className="dispatch-clock"><Clock3 size={15}/>{new Date(now).toLocaleTimeString()}</span></section>
     {loading ? <div className="dispatch-empty"><Activity size={23}/><strong>Loading secure queue…</strong></div> : !queue.length ? <div className="dispatch-empty"><Radio size={24}/><strong>Queue clear</strong><span>New escalations appear here in real time.</span></div> : <section className="dispatch-grid">{queue.map((incident) => {
-      const exactMap = Number.isFinite(incident.location?.lat) && Number.isFinite(incident.location?.lng) ? `https://maps.google.com/?q=${incident.location.lat},${incident.location.lng}` : null;
-      const playerUrl = twitchPlayerUrl(incident.stream_url, window.location.hostname);
+      const exactMap = Number.isFinite(incident.location?.lat) && Number.isFinite(incident.location?.lng) ? `geo:${incident.location.lat},${incident.location.lng}?q=${incident.location.lat},${incident.location.lng}` : null;
       const sent = ['SENT', 'ACKNOWLEDGED'].includes(incident.dispatch_record?.status);
       return <article className={`dispatch-card severity-${incident.threat_level.toLowerCase()}`} key={incident.incident_id}>
         <div className="dispatch-card-head"><span className={`dispatch-severity ${incident.threat_level.toLowerCase()}`}><i/>{incident.threat_level}</span><span className="dispatch-id">{incident.incident_id}</span><time>{since(incident.created_at)} ago</time></div>
-        <div className="dispatch-report-title"><Siren size={19}/><div><strong>{incident.module.replaceAll('_', ' ')} · {incident.source.toUpperCase()}</strong><small>{incident.streamer_contact?.display_name || incident.streamer_contact?.twitch_login || 'Streamer'} · {incident.status.replaceAll('_', ' ')}</small></div></div>
+        <div className="dispatch-report-title"><Siren size={19}/><div><strong>{incident.module.replaceAll('_', ' ')} · {incident.source.toUpperCase()}</strong><small>{incident.streamer_contact?.display_name || 'FULE member'} · {incident.status.replaceAll('_', ' ')}</small></div></div>
         <p className="dispatch-summary">{incident.summary}</p>
         <div className="dispatch-location"><MapPin size={16}/><span><strong>{incident.location?.address || 'Address unavailable'}</strong><small>{incident.location?.lat ?? '—'}, {incident.location?.lng ?? '—'}</small></span>{exactMap && <a href={exactMap} target="_blank" rel="noreferrer">MAP PIN</a>}</div>
         <div className="dispatch-eta"><Truck size={15}/><span>Response ETA</span><strong>{incident.dispatch_record?.responder_eta_minutes != null ? `${incident.dispatch_record.responder_eta_minutes} min` : 'Awaiting provider'}</strong><span className="dispatch-provider-state">{incident.dispatch_record?.status || 'QUEUED'}</span></div>
         {incident.transcript_snippet && <details className="dispatch-transcript"><summary>Transcript snippet</summary><p>{incident.transcript_snippet}</p></details>}
-        {incident.clip_url && <a className="dispatch-evidence" href={incident.clip_url} target="_blank" rel="noreferrer"><BadgeCheck size={15}/>Clip evidence</a>}
-        {playerUrl ? <iframe className="dispatch-player" src={playerUrl} title={`Live stream for ${incident.incident_id}`} allow="autoplay; fullscreen" allowFullScreen/> : <div className="dispatch-stream-placeholder"><Radio size={16}/>No live stream available</div>}
+        <div className="dispatch-stream-placeholder"><Radio size={16}/>Private live stream is available to accepted guardians only.</div>
         <div className="dispatch-operator-read"><strong>Operator summary</strong><p>{incident.summary} Address: {incident.location?.address || 'unavailable'}.</p><button onClick={() => copySummary(incident)}>{copied === incident.incident_id ? <Check size={14}/> : null}{copied === incident.incident_id ? 'Copied' : 'Copy summary to read'}</button><a href="tel:112"><Siren size={14}/>Call 112</a></div>
         <div className="dispatch-card-actions">
           {!sent && <button onClick={() => act(incident, 'ACCEPT')} disabled={Boolean(busy[incident.incident_id])}>{busy[incident.incident_id] === 'ACCEPT' ? 'Accepting…' : 'Accept'}</button>}

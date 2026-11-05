@@ -1,20 +1,15 @@
-import { Buffer } from 'node:buffer';
+import { incidentRepository } from './incidentStore.js';
+import { sendTrustedContactPush } from './webPushNotifier.js';
 
-export async function notifyTrustedContacts({ contacts, incident, demoMode, streamLinks = {}, env = process.env, fetchImpl = globalThis.fetch }) {
-  if (demoMode) return { status: 'MOCKED', notified: contacts.map(({ name }) => ({ name, channel: 'simulated-sms' })) };
-  const account = env.TWILIO_ACCOUNT_SID;
-  const token = env.TWILIO_AUTH_TOKEN;
-  const from = env.TWILIO_FROM_NUMBER;
-  if (!account || !token || !from) return { status: 'FAILED', notified: [], error: 'Twilio credentials are not configured.' };
+export async function notifyTrustedContacts({ contacts = [], incident, streamLinks = {} }) {
+  if (!incidentRepository.db || !contacts.length) return { status: 'SKIPPED', notified: [], error: null };
+  const rows = await incidentRepository.db('accounts').select('account_id', 'email').whereIn('email', contacts.map((contact) => contact.email));
+  const byEmail = new Map(rows.map((account) => [account.email, account.account_id]));
   const notified = [];
   for (const contact of contacts) {
-    const message = `FULE safety alert for ${incident.streamer_contact?.display_name || 'your trusted contact'}. ${incident.summary} Area: ${incident.location.address}. Exact pin: ${incident.location.lat}, ${incident.location.lng}. Private live stream (expires in 10 minutes): ${streamLinks[contact.phone] || 'not available'}. Contact them or emergency services if needed.`;
-    const body = new URLSearchParams({ To: contact.phone, From: from, Body: message });
-    const response = await fetchImpl(`https://api.twilio.com/2010-04-01/Accounts/${encodeURIComponent(account)}/Messages.json`, {
-      method: 'POST', headers: { authorization: `Basic ${Buffer.from(`${account}:${token}`).toString('base64')}`, 'content-type': 'application/x-www-form-urlencoded' }, body
-    });
-    if (!response.ok) throw new Error(`Twilio notification returned HTTP ${response.status}.`);
-    notified.push({ name: contact.name, channel: 'sms' });
+    const accountId = byEmail.get(contact.email);
+    if (!accountId) continue;
+    if (await sendTrustedContactPush(accountId, { incident_id: incident.incident_id, threat_level: incident.threat_level, summary: incident.summary, url: streamLinks[contact.email] })) notified.push(contact.email);
   }
-  return { status: 'SENT', notified };
+  return { status: notified.length ? 'SENT' : 'SKIPPED', notified, error: null };
 }

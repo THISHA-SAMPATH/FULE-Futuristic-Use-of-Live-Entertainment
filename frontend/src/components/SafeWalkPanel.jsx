@@ -9,7 +9,7 @@ function vapidKeyBytes(value) {
   return Uint8Array.from(atob(padded), (character) => character.charCodeAt(0));
 }
 
-export default function SafeWalkPanel({ demoMode, streamer, activeIncident, onEmergency }) {
+export default function SafeWalkPanel({ demoMode, streamer, accessToken = '', activeIncident, onEmergency }) {
   const [destination, setDestination] = useState('');
   const [eta, setEta] = useState(30);
   const [interval, setInterval] = useState(5);
@@ -92,7 +92,7 @@ export default function SafeWalkPanel({ demoMode, streamer, activeIncident, onEm
           if (publicKey) {
             const registration = await navigator.serviceWorker.register('/sw.js');
             const subscription = await registration.pushManager.getSubscription() || await registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: vapidKeyBytes(publicKey) });
-            const saved = await fetch(`${API_URL}/api/safe-walks/push-subscription`, { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ streamer_id: streamer?.id || (demoMode ? 'demo-streamer' : undefined), subscription: subscription.toJSON() }) });
+            const saved = await fetch(`${API_URL}/api/safe-walks/push-subscription`, { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json', ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}) }, body: JSON.stringify({ streamer_id: streamer?.id || (demoMode ? 'demo-streamer' : undefined), subscription: subscription.toJSON() }) });
             if (saved.ok) setPushReady(true);
           }
         } catch { setPushReady(false); }
@@ -102,7 +102,7 @@ export default function SafeWalkPanel({ demoMode, streamer, activeIncident, onEm
         if (!navigator.geolocation) return reject(new Error('Location access is unavailable in this browser.'));
         navigator.geolocation.getCurrentPosition((position) => resolve({ lat: position.coords.latitude, lng: position.coords.longitude }), () => reject(new Error('Location permission is required to start a safe walk.')), { enableHighAccuracy: true, timeout: 12_000, maximumAge: 0 });
       });
-      const response = await fetch(`${API_URL}/api/safe-walks`, { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ streamer_id: streamer?.id || (demoMode ? 'demo-streamer' : undefined), destination, eta_minutes: Number(eta), check_in_interval_minutes: Number(interval), safe_pin: safePin, duress_pin: duressPin, location }) });
+      const response = await fetch(`${API_URL}/api/safe-walks`, { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json', ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}) }, body: JSON.stringify({ streamer_id: streamer?.id || (demoMode ? 'demo-streamer' : undefined), destination, eta_minutes: Number(eta), check_in_interval_minutes: Number(interval), safe_pin: safePin, duress_pin: duressPin, location }) });
       const data = await response.json(); if (!response.ok) throw new Error(data.error || 'Could not start a safe walk.');
       setWalk(data.walk); setSessionToken(data.session_token); sessionStorage.setItem('fuleSafeWalk', JSON.stringify({ walk: data.walk, session_token: data.session_token })); setSafePin(''); setDuressPin('');
     } catch (requestError) { setError(requestError.message); }

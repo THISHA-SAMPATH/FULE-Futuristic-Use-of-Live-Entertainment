@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createHash } from 'node:crypto';
+import { createHash, createHmac } from 'node:crypto';
 import { TokenVerifier } from 'livekit-server-sdk';
 import { createLiveStreamService } from '../services/liveStreamService.js';
 import { createEvidenceEntry, verifyEvidenceChain } from '../services/safetyFeatures.js';
@@ -18,23 +18,37 @@ test('demo stream works without camera or LiveKit credentials and denies unautho
 test('LiveKit JWT is scoped to one incident room and role permissions', async () => {
   const createdRooms = [];
   const service = createLiveStreamService({
-    env: { DEMO_MODE: 'false', LIVEKIT_URL: 'wss://example.livekit.cloud', LIVEKIT_API_KEY: 'test-key', LIVEKIT_API_SECRET: 'test-secret', LIVEKIT_TOKEN_TTL_SECONDS: '120' },
+    env: { DEMO_MODE: 'false', LIVEKIT_URL: 'wss://media.fule.local', LIVEKIT_API_KEY: 'test-key', LIVEKIT_API_SECRET: 'test-secret', LIVEKIT_TOKEN_TTL_SECONDS: '120' },
     roomService: { createRoom: async ({ name }) => createdRooms.push(name) },
     egressClient: { startRoomCompositeEgress: async () => ({ egressId: 'egress-1' }) }
   });
   const streamer = await service.issueToken({ incident: activeIncident, principal: { id: 'streamer-01' }, role: 'streamer', authorized: true });
   const claims = await new TokenVerifier('test-key', 'test-secret').verify(streamer.token);
   assert.equal(claims.video.room, streamer.room); assert.equal(claims.video.canPublish, true); assert.equal(claims.video.canSubscribe, false);
-  assert.equal(streamer.server_url, 'wss://example.livekit.cloud'); assert.deepEqual(createdRooms, [streamer.room]);
+  assert.equal(streamer.server_url, 'wss://media.fule.local'); assert.deepEqual(createdRooms, [streamer.room]);
   const guardian = await service.issueToken({ incident: activeIncident, principal: { id: 'guardian-01' }, role: 'guardian', authorized: true });
   const guardianClaims = await new TokenVerifier('test-key', 'test-secret').verify(guardian.token);
   assert.equal(guardianClaims.video.room, streamer.room); assert.equal(guardianClaims.video.canPublish, false); assert.equal(guardianClaims.video.canSubscribe, true);
 });
 
+test('self-hosted TURN credentials are short-lived and participant-scoped', async () => {
+  const now = 1_800_000_000_000;
+  const service = createLiveStreamService({
+    env: { DEMO_MODE: 'false', LIVEKIT_URL: 'ws://media.fule.local', LIVEKIT_API_KEY: 'key', LIVEKIT_API_SECRET: 'secret', TURN_SHARED_SECRET: 'turn-secret', LIVEKIT_TURN_URL: 'turn:turn.fule.local:3478?transport=udp' },
+    now: () => now,
+    roomService: { createRoom: async () => {} }
+  });
+  const result = await service.issueToken({ incident: activeIncident, principal: { id: 'guardian-01' }, role: 'guardian', authorized: true });
+  const turn = result.ice_servers.iceServers[0];
+  assert.equal(turn.urls[0], 'turn:turn.fule.local:3478?transport=udp');
+  assert.match(turn.username, /^1800000180:guardian:guardian-01$/);
+  assert.equal(turn.credential, createHmac('sha1', 'turn-secret').update(turn.username).digest('base64'));
+});
+
 test('closing an incident revokes room tokens and removes participants', async () => {
   const removed = []; const deleted = [];
   const service = createLiveStreamService({
-    env: { DEMO_MODE: 'false', LIVEKIT_URL: 'https://example.livekit.cloud', LIVEKIT_API_KEY: 'key', LIVEKIT_API_SECRET: 'secret' },
+    env: { DEMO_MODE: 'false', LIVEKIT_URL: 'https://media.fule.local', LIVEKIT_API_KEY: 'key', LIVEKIT_API_SECRET: 'secret' },
     roomService: { createRoom: async () => {}, listParticipants: async () => [{ identity: 'streamer:a' }, { identity: 'guardian:b' }], removeParticipant: async (room, identity, options) => removed.push({ room, identity, options }), deleteRoom: async (room) => deleted.push(room) }
   });
   await service.issueToken({ incident: activeIncident, principal: { id: 'streamer-01' }, role: 'streamer', authorized: true });
@@ -44,7 +58,7 @@ test('closing an incident revokes room tokens and removes participants', async (
 });
 
 test('trusted-circle links are signed, short-lived, and scoped to one incident and streamer', () => {
-  const token = createTrustedContactStreamToken({ incidentId: activeIncident.incident_id, streamerId: activeIncident.streamer_id, phone: '+14155550123' });
+  const token = createTrustedContactStreamToken({ incidentId: activeIncident.incident_id, streamerId: activeIncident.streamer_id, contactEmail: 'friend@example.test' });
   assert.equal(authenticateTrustedContactStreamToken(token, activeIncident.incident_id, activeIncident.streamer_id)?.role, 'trusted_contact');
   assert.equal(authenticateTrustedContactStreamToken(token, 'other-incident', activeIncident.streamer_id), null);
   assert.equal(authenticateTrustedContactStreamToken(token, activeIncident.incident_id, 'other-streamer'), null);
@@ -55,9 +69,9 @@ test('LiveKit recording is hashed from S3 bytes into the append-only evidence ch
   const evidenceStore = { appendEvidence: async ({ incident_id, build }) => { const entry = build(entries.length + 1, entries.at(-1)?.chain_hash || '0'.repeat(64)); entries.push(entry); return entry; }, listExpiredStreamRecordings: async () => [] };
   const evidenceVault = { appendExternalHash: async (incidentId, payload) => evidenceStore.appendEvidence({ incident_id: incidentId, build: (sequence, previousHash) => createEvidenceEntry({ chunk_id: `recording-${sequence}`, incident_id: incidentId, sequence, recorded_at: payload.recordedAt, storage_key: payload.storageKey, sha256: payload.sha256, previous_hash: previousHash, metadata: payload.metadata }) }), appendRetentionTombstone: async () => {} };
   const service = createLiveStreamService({
-    env: { DEMO_MODE: 'false', LIVEKIT_URL: 'https://example.livekit.cloud', LIVEKIT_API_KEY: 'key', LIVEKIT_API_SECRET: 'secret', LIVEKIT_WEBHOOK_URL: 'https://fule.example/api/livekit/webhook', LIVEKIT_EGRESS_S3_BUCKET: 'fule-test', AWS_ACCESS_KEY_ID: 'id', AWS_SECRET_ACCESS_KEY: 'secret', LIVEKIT_EGRESS_PREFIX: 'fule-evidence' },
+    env: { DEMO_MODE: 'false', LIVEKIT_URL: 'https://media.fule.local', LIVEKIT_API_KEY: 'key', LIVEKIT_API_SECRET: 'secret', LIVEKIT_WEBHOOK_URL: 'http://fule.local:4000/api/livekit/webhook', LIVEKIT_EGRESS_S3_BUCKET: 'fule-test', AWS_ACCESS_KEY_ID: 'id', AWS_SECRET_ACCESS_KEY: 'secret', AWS_S3_ENDPOINT: 'http://minio:9000', LIVEKIT_EGRESS_PREFIX: 'fule-evidence' },
     evidenceVault, evidenceStore, roomService: { createRoom: async () => {} },
-    egressClient: { startRoomCompositeEgress: async (_room, _output, options) => { assert.equal(options.webhooks[0].url, 'https://fule.example/api/livekit/webhook'); return { egressId: 'eg-1' }; } },
+    egressClient: { startRoomCompositeEgress: async (_room, _output, options) => { assert.equal(options.webhooks[0].url, 'http://fule.local:4000/api/livekit/webhook'); return { egressId: 'eg-1' }; } },
     webhookReceiver: { receive: async () => ({ event: 'egress_ended', egressInfo: { roomName: service.roomName(activeIncident.incident_id), fileResults: [{ filename: `${'fule-evidence'}/${activeIncident.incident_id}/recording.mp4`, endedAt: String(Date.now() * 1_000_000) }] } }) },
     s3ObjectReader: async () => bytes
   });

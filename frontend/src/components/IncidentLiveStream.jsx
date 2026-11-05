@@ -91,7 +91,7 @@ const IncidentLiveStream = forwardRef(function IncidentLiveStream({ incident, st
         });
         room.on(RoomEvent.TrackUnsubscribed, (track) => { track.detach(); if (track.kind === 'video') setRemoteVideo(null); if (track.kind === 'audio') setRemoteAudio(null); });
         room.on(RoomEvent.Disconnected, () => { setStatus('reconnecting'); setMessage('Connection interrupted. Reconnecting…'); });
-        await room.connect(access.server_url, access.token, { autoSubscribe: !isPublisher });
+        await room.connect(access.server_url, access.token, { autoSubscribe: !isPublisher, ...(access.ice_servers ? { rtcConfig: access.ice_servers } : {}) });
         if (isPublisher) {
           const ready = mediaRef.current ? true : await startCapture();
           if (!ready) { setStatus('unavailable'); return; }

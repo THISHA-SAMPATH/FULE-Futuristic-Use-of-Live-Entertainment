@@ -1,0 +1,57 @@
+{
+  "environment": "single-process local demo, in-memory incident repository, 4 logical CPUs; no PostgreSQL, Redis, or multiple API instances",
+  "change_under_evaluation": "skip persisting an empty nearby-guardian offer set",
+  "runs": [
+    {
+      "phase": "before change",
+      "socket_clients": 1000,
+      "target_sos_per_second": 50,
+      "duration_seconds": 15,
+      "requests_attempted": 499,
+      "achieved_sos_per_second": 33.27,
+      "accepted": 392,
+      "request_error_rate": 0.2144,
+      "error_type": "network or timeout",
+      "delivery_latency_ms": { "p50": 5869, "p95": 25872, "p99": 26137 },
+      "backend_peak_rss_mb": 225.4,
+      "backend_cpu_user_seconds": 10.41,
+      "backend_cpu_system_seconds": 11.61
+    },
+    {
+      "phase": "after change",
+      "socket_clients": 1000,
+      "target_sos_per_second": 50,
+      "duration_seconds": 15,
+      "requests_attempted": 405,
+      "achieved_sos_per_second": 26.69,
+      "accepted": 343,
+      "request_error_rate": 0.1531,
+      "error_type": "network or timeout",
+      "delivery_latency_ms": { "p50": 12187, "p95": 31620, "p99": 37659 },
+      "backend_peak_rss_mb": 194.24,
+      "backend_cpu_user_seconds": 12.97,
+      "backend_cpu_system_seconds": 23.87
+    },
+    {
+      "phase": "after change, lower request target",
+      "socket_clients": 1000,
+      "target_sos_per_second": 10,
+      "duration_seconds": 15,
+      "requests_attempted": 148,
+      "achieved_sos_per_second": 9.87,
+      "accepted": 137,
+      "request_error_rate": 0.0743,
+      "error_type": "network or timeout",
+      "delivery_latency_ms": { "p50": 6357, "p95": 16629, "p99": 16746 },
+      "backend_peak_rss_mb": 227.04,
+      "backend_cpu_user_seconds": 7.55,
+      "backend_cpu_system_seconds": 11.19
+    }
+  ],
+  "limits": [
+    "Three individual runs are noisy and are not a statistically controlled comparison.",
+    "Latency is measured from request start until the public Socket.IO alert is received by the load client.",
+    "The harness's requests that failed before receiving an HTTP response are counted as network or timeout errors.",
+    "The tested backend is single-process demo mode and does not demonstrate production or horizontal capacity."
+  ]
+}

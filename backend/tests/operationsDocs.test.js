@@ -2,9 +2,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 
-test('CI fails on verification failures and only deploys main through the configured hook', async () => {
+test('CI provisions local service containers and blocks on verification failures', async () => {
   const workflow = await readFile(new URL('../../.github/workflows/ci.yml', import.meta.url), 'utf8');
-  for (const required of ['npm test', 'npm run build', 'npm audit --audit-level=high', "github.ref == 'refs/heads/main'", 'RENDER_DEPLOY_HOOK_URL', 'curl --fail']) assert.ok(workflow.includes(required), `workflow missing ${required}`);
+  for (const required of ['npm test', 'npm run build', 'npm audit --audit-level=high', 'postgres:', 'redis:', 'docker compose config --quiet']) assert.ok(workflow.includes(required), `workflow missing ${required}`);
+  assert.doesNotMatch(workflow, /deploy hook|curl --fail/i);
 });
 
 test('runbook documents slow alerts and failing SOS checks using exported health and metrics', async () => {

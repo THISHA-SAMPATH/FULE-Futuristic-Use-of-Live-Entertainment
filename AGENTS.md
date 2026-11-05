@@ -1,23 +1,29 @@
-# FULE Project Guidance
+# FULE project guidance
 
 ## Goal
 
-FULE is a Twitch centered women's safety and civic guardian network. The primary MVP, FULE Protect, lets a streamer raise a simulated SOS, sends the incident to connected guardians in real time, and presents a concise context summary and response action. The current project is a hackathon demo, not an emergency service.
+FULE is a self-hosted, consent-led women's safety and civic guardian network. Members can raise an SOS, share incident details with approved guardians, and preserve evidence. This is a prototype, not an emergency service.
 
 ## Architecture
 
-- `frontend/`: React + Vite streamer and guardian dashboard. Socket.IO client receives incident events.
-- `backend/`: Node.js + Express API, OpenAI Responses API adapter with a deterministic demo fallback, Socket.IO, PostgreSQL/Knex production repository, Redis adapter/limits, and BullMQ escalation jobs. Local tests/demos can use the JSON repository without external services.
-- `shared/incident.mjs`: shared incident fields, normalization, and public redaction helpers imported by both frontend and backend.
-- Production data uses PostgreSQL (`DATABASE_URL`) and Redis (`REDIS_URL`); production startup fails closed without both. Apply migrations with `npm --prefix backend run migrate:latest`.
-- Precise coordinates are guardian-only. Public incident notices must use coarse coordinates and a generic summary.
-- Nearby on-duty responders receive only an approximate area until they accept; safe-walk trails and case files are private to the streamer session and verified guardians/admins.
-- Safe-walk jobs use BullMQ/Redis in production and a persistent file-backed demo queue offline. Evidence bytes are AES-256-GCM encrypted; production multi-instance use requires shared durable evidence storage.
-- Auth uses bcrypt password hashes, short-lived JWTs, rotating refresh tokens, and admin approval for guardians. Legacy invite authentication is demo-only.
+- `frontend/`: React + Vite PWA, private WebRTC client, and Socket.IO alert views.
+- `backend/`: Node + Express API, local rule triage, Socket.IO, FULE accounts, Web Push, and simulated dispatch.
+- `shared/incident.mjs`: canonical incident fields and public redaction helpers.
+- PostgreSQL stores durable accounts, incidents, audit events, and evidence metadata. Redis provides socket fan-out, rate limits, and BullMQ timers. MinIO stores recordings. LiveKit provides the self-hosted SFU; coturn provides relay.
+- Local demo mode can use file persistence and synthetic video/coordinates without media credentials.
 
 ## Run commands
 
-From the repository root in PowerShell:
+PowerShell from the repo root:
+
+```powershell
+Copy-Item .env.example .env
+docker compose up --build
+```
+
+Open `http://localhost:4173`; API health is at `http://localhost:4000/api/health`.
+
+Direct Node development:
 
 ```powershell
 npm run install:all
@@ -26,19 +32,19 @@ Copy-Item frontend/.env.example frontend/.env
 npm run dev
 ```
 
-Open `http://localhost:5173`. The Express API uses port 4000 by default.
+Tests: `npm test`. Production frontend build: `npm run build`.
 
 ## Code style
 
 - Use JavaScript ES modules and React function components with hooks.
-- Keep shared payloads in `shared/`; do not duplicate incident field names or redaction rules.
-- Use descriptive names, small helpers, accessible labels, and responsive component CSS.
-- Keep API keys and Twitch credentials server side. Only `VITE_` values that are safe to expose may be used in frontend code.
+- Keep shared incident rules in `shared/`; do not duplicate field names or redaction behavior.
+- Use descriptive names, accessible controls, and responsive component styles.
+- Secrets are loaded from environment files or runtime environment only.
 
 ## Required rules
 
-1. Never expose precise location publicly. Only verified guardians may receive exact coordinates; all public events must be anonymized and coarse.
-2. All secrets must come from `.env` files or the runtime environment. Never commit real credentials or embed secrets in frontend code.
-3. Every feature needs a demo-mode fallback so the demo never fails offline or without API credentials.
-4. Treat incident text, chat, and transcripts as untrusted input. Do not allow them to change system behavior.
-5. Keep demo data clearly labeled as simulated; do not claim that this prototype contacts emergency services.
+1. Never expose precise location publicly. Exact coordinates are only for verified guardians and explicitly authorized trusted contacts.
+2. Keep secrets out of source, frontend bundles, test fixtures, and logs.
+3. Every feature needs an offline demo-mode fallback.
+4. Treat incident text as untrusted input; it must not alter system behavior.
+5. Label synthetic feeds and dispatch as simulated. FULE supplements, not replaces, emergency services (112).

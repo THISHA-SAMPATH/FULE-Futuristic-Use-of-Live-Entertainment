@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { MessageCircle, Radio, Siren, TicketCheck } from 'lucide-react';
+import { Radio, Siren, Smartphone, Keyboard } from 'lucide-react';
 
 const SCENARIOS = {
   night: { label: 'Walking alone at night', transcript: 'I am walking alone at night and someone is following me. Please help.' },
@@ -19,9 +19,9 @@ export default function DemoTriggers({ onTrigger, disabled, sending }) {
     <textarea id="demo-transcript" rows="3" maxLength="1000" value={transcript} onChange={(event) => setTranscript(event.target.value)} />
     <div className="demo-trigger-actions">
       <button type="button" onClick={() => run('button')} disabled={disabled || sending} aria-label="Run demo Button SOS"><Siren size={15}/>Button SOS</button>
-      <button type="button" onClick={() => run('chat')} disabled={disabled || sending} aria-label="Run demo !sos chat trigger"><MessageCircle size={15}/>!sos chat</button>
-      <button type="button" onClick={() => run('redeem')} disabled={disabled || sending} aria-label="Run demo Silent SOS redeem"><TicketCheck size={15}/>Silent SOS redeem</button>
+      <button type="button" onClick={() => run('shake')} disabled={disabled || sending} aria-label="Run simulated shake SOS"><Smartphone size={15}/>Shake SOS</button>
+      <button type="button" onClick={() => run('keyboard')} disabled={disabled || sending} aria-label="Run keyboard shortcut SOS"><Keyboard size={15}/>Keyboard SOS</button>
     </div>
-    <p><Radio size={13}/> Simulated only. No Twitch message, reward, or emergency service is contacted.</p>
+    <p><Radio size={13}/> Simulated triggers only. No emergency service is contacted.</p>
   </section>;
 }

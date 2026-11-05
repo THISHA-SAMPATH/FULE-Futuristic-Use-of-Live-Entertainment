@@ -4,23 +4,19 @@ import dotenv from 'dotenv';
 import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
-import * as Sentry from '@sentry/node';
 import { Server } from 'socket.io';
 import { fileURLToPath } from 'node:url';
 import { INCIDENT_MODULE, createIncident, isIncident, toPublicIncident } from '../shared/incident.mjs';
-import { authenticateGuardian, seedDemoInvite, verifyGuardianInvite } from './services/guardianRegistry.js';
 import { writeAudit } from './services/auditLog.js';
-import { deterministicFallback, synthesizeIncident, incidentAiHealth } from './services/incidentSynthesizer.js';
+import { provisionalTriage, runTriage, triageHealth } from './services/triageEngine.js';
 import { createStreamerRateLimiter, validateSosPayload } from './services/sosValidation.js';
-import { TwitchIntegration } from './services/twitchIntegration.js';
 import { incidentRepository, loadIncidents, getIncident as getStoredIncident, listIncidentPage, listDispatchQueue, persistIncident, removeIncident, loadTrustedContactsFresh, saveTrustedContacts, recordFalseAlarm, flushIncidentWrites, cleanupIncidentData, closeIncidentStore } from './services/incidentStore.js';
 import { createDispatchProvider, createEmergencyReport } from './services/dispatchBridge.js';
 import { createEscalationLadder } from './services/escalationLadder.js';
 import { notifyTrustedContacts } from './services/trustedContactNotifier.js';
-import { authenticateAccess, authenticateTrustedContactStreamToken, createTrustedContactStreamToken, loginAccount, refreshAccount, registerAccount, requestGuardianApproval, approveGuardian } from './services/accountService.js';
+import { authenticateAccess, authenticateTrustedContactStreamToken, createTrustedContactStreamToken, loginAccount, refreshAccount, revokeRefreshToken, registerAccount, requestGuardianApproval, approveGuardian } from './services/accountService.js';
 import { redis, redisEnabled, installSocketAdapter, verifyRuntimeInfrastructure, scheduleEscalationJobs, cancelEscalationJobs, scheduleSafeWalkCheckin, scheduleSafeWalkTimeout, cancelSafeWalkJobs, startBackgroundWorkers, closeRuntimeInfrastructure } from './services/runtimeInfrastructure.js';
 import { activeSockets, alertDeliveryLatency, httpRequestDuration, httpRequests, log, metricsRegistry, queueDepth, requestContext } from './services/securityMetrics.js';
-import { twitchAccountStore } from './services/twitchAccountStore.js';
 import { createSafeWalkWorkflow, matchNearbyGuardians, safeWalkTokenMatches } from './services/safetyFeatures.js';
 import { safetyFeatureStore } from './services/safetyFeatureStore.js';
 import { EvidenceVault } from './services/evidenceVault.js';
@@ -41,34 +37,10 @@ httpServer.maxRequestsPerSocket = 1_000;
 const port = Number(process.env.PORT) || 4000;
 const allowedOrigin = process.env.FRONTEND_ORIGIN || 'http://localhost:5173';
 const demoMode = process.env.DEMO_MODE === 'true';
-const twitchIntegrationEnabled = process.env.TWITCH_INTEGRATION_ENABLED === 'true';
-if (process.env.SENTRY_DSN) Sentry.init({
-  dsn: process.env.SENTRY_DSN,
-  environment: process.env.NODE_ENV || 'development',
-  tracesSampleRate: Number(process.env.SENTRY_TRACES_SAMPLE_RATE) || 0,
-  sendDefaultPii: false,
-  beforeSend(event) {
-    if (event.request) {
-      delete event.request.data;
-      if (event.request.headers) {
-        delete event.request.headers.authorization;
-        delete event.request.headers.cookie;
-        delete event.request.headers.Authorization;
-        delete event.request.headers.Cookie;
-      }
-    }
-    return event;
-  }
-});
 if (process.env.NODE_ENV === 'production' && !process.env.DATABASE_URL) throw new Error('DATABASE_URL is required in production.');
 if (process.env.NODE_ENV === 'production' && !process.env.METRICS_TOKEN) throw new Error('METRICS_TOKEN is required in production.');
 if (process.env.NODE_ENV === 'production' && Buffer.from(process.env.EVIDENCE_ENCRYPTION_KEY || '', 'base64').length !== 32) throw new Error('EVIDENCE_ENCRYPTION_KEY must be base64 encoded 32 random bytes in production.');
-const dispatchProvider = createDispatchProvider({
-  demoMode,
-  url: process.env.DISPATCH_WEBHOOK_URL,
-  secret: process.env.DISPATCH_WEBHOOK_SECRET,
-  retries: Number(process.env.DISPATCH_WEBHOOK_RETRIES) || 2
-});
+const dispatchProvider = createDispatchProvider();
 const parsedAllowedOrigin = new URL(allowedOrigin);
 if (!['http:', 'https:'].includes(parsedAllowedOrigin.protocol) || parsedAllowedOrigin.origin !== allowedOrigin) {
   throw new Error('FRONTEND_ORIGIN must be a single HTTP(S) origin without a path.');
@@ -76,7 +48,6 @@ if (!['http:', 'https:'].includes(parsedAllowedOrigin.protocol) || parsedAllowed
 if (!demoMode && parsedAllowedOrigin.protocol !== 'https:' && !['localhost', '127.0.0.1', '::1'].includes(parsedAllowedOrigin.hostname)) {
   throw new Error('Non-demo deployments must use an HTTPS FRONTEND_ORIGIN.');
 }
-if (demoMode) seedDemoInvite(process.env.FULE_DEMO_GUARDIAN_INVITE);
 
 function isAllowedOrigin(origin) {
   if (!origin || origin === allowedOrigin) return true;
@@ -110,11 +81,7 @@ const volatileIncidents = new Map();
 let databaseDegraded = false;
 const cancelCredentials = new Map();
 const timers = new Map();
-const inviteAttempts = new Map();
 const streamerLocations = new Map();
-const sessionCookie = 'fule_twitch_session';
-const oauthStateCookie = 'fule_twitch_oauth_state';
-const sessionCookieSameSite = parsedAllowedOrigin.protocol === 'https:' ? 'none' : 'lax';
 const loadTestTokenHash = process.env.FULE_LOAD_TEST_TOKEN ? hashToken(process.env.FULE_LOAD_TEST_TOKEN).toString('hex') : '';
 const tieredLimiter = createTieredRateLimiter({ redis });
 const creatingIncidents = new Set();
@@ -173,7 +140,7 @@ app.use((req, res, next) => {
     'Referrer-Policy': 'no-referrer',
     'Content-Security-Policy': "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
     'X-Permitted-Cross-Domain-Policies': 'none',
-    'Permissions-Policy': 'camera=(), microphone=(), geolocation=(self)',
+    'Permissions-Policy': 'camera=(self), microphone=(self), geolocation=(self)',
     'Cache-Control': 'no-store',
     'Cross-Origin-Opener-Policy': 'same-origin'
   });
@@ -267,7 +234,9 @@ function getBearerToken(request) {
 }
 
 function getGuardian(request) {
-  return authenticateGuardian(getBearerToken(request));
+  const account = authenticateAccess(getBearerToken(request));
+  if (!account || !['guardian', 'admin'].includes(account.role)) return null;
+  return { guardian_id: account.account_id, role: account.role, expires_at: account.expires_at };
 }
 
 function requireRoles(...roles) {
@@ -285,13 +254,6 @@ function requireRoles(...roles) {
   };
 }
 
-async function getTwitchUser(req) {
-  const cookie = String(req.headers.cookie || '').split(';').map((item) => item.trim()).find((item) => item.startsWith(`${sessionCookie}=`));
-  if (!cookie) return null;
-  try { return await twitch.sessionAsync(decodeURIComponent(cookie.slice(sessionCookie.length + 1))); }
-  catch { return null; }
-}
-
 async function getIncident(incidentId) { return volatileIncidents.get(incidentId) || getStoredIncident(incidentId); }
 
 async function withDeadline(promise, timeoutMs, label) {
@@ -304,19 +266,10 @@ async function withDeadline(promise, timeoutMs, label) {
 }
 
 async function getStreamerIdentity(req, suppliedId = '') {
-  const user = await getTwitchUser(req);
-  if (user?.id) return { id: user.id, user };
   const account = authenticateAccess(getBearerToken(req));
-  if (account && ['user', 'guardian'].includes(account.role)) return { id: account.account_id, user: { id: account.account_id, display_name: 'FULE member', role: account.role } };
+  if (account && ['user', 'guardian', 'admin'].includes(account.role)) return { id: account.account_id, user: { id: account.account_id, display_name: account.email || 'FULE member', role: account.role } };
   if (demoMode && isLoopbackRequest(req) && typeof suppliedId === 'string' && suppliedId.trim()) return { id: suppliedId.trim().slice(0, 128), user: null };
   return null;
-}
-
-function getCookie(req, name) {
-  const pair = String(req.headers.cookie || '').split(';').map((item) => item.trim()).find((item) => item.startsWith(`${name}=`));
-  if (!pair) return null;
-  try { return decodeURIComponent(pair.slice(name.length + 1)); }
-  catch { return null; }
 }
 
 function isLoopbackAddress(value) {
@@ -457,11 +410,11 @@ async function contactTrustedPeople(incidentId) {
   if (contacts.length) {
     try {
       const streamLinks = {};
-      if (!demoMode) for (const contact of contacts) {
-        const token = createTrustedContactStreamToken({ incidentId, streamerId: current.streamer_id, phone: contact.phone });
-        streamLinks[contact.phone] = `${allowedOrigin}/?fuleIncident=${encodeURIComponent(incidentId)}#fuleStream=${encodeURIComponent(token)}`;
+      for (const contact of contacts) {
+        const token = createTrustedContactStreamToken({ incidentId, streamerId: current.streamer_id, contactEmail: contact.email });
+        streamLinks[contact.email] = `${allowedOrigin}/?fuleIncident=${encodeURIComponent(incidentId)}#fuleStream=${encodeURIComponent(token)}`;
       }
-      result = await notifyTrustedContacts({ contacts, incident: current, demoMode, streamLinks });
+      result = await notifyTrustedContacts({ contacts, incident: current, streamLinks });
     }
     catch (error) { result = { status: 'FAILED', notified: [], error: error.message }; }
   }
@@ -489,9 +442,8 @@ async function sendToDispatch(incidentId, cause = 'ESCALATION') {
   });
   emitIncidentUpdate(queued, 'dispatch_queued');
   current = incidents.get(incidentId);
-  const twitchAccount = current.streamer_contact || (current.streamer_id ? twitch.accounts.get(current.streamer_id) : null);
   const report = createEmergencyReport(current, {
-    streamerContact: current.streamer_contact || (twitchAccount ? { streamer_id: current.streamer_id, display_name: twitchAccount.display_name || twitchAccount.login, twitch_login: twitchAccount.login } : null),
+    streamerContact: current.streamer_contact,
     guardianResponses: current.guardian_responses || []
   });
   try {
@@ -592,20 +544,20 @@ async function createSosIncident(input) {
     audio_transcript_snippet: payload.audio_transcript_snippet,
     module_type: payload.module_type,
     source: payload.source,
+    risk_level: payload.risk_level,
     location: {
       lat: Number.isFinite(payload.location.lat) ? Math.round(payload.location.lat * 100) / 100 : null,
       lng: Number.isFinite(payload.location.lng) ? Math.round(payload.location.lng * 100) / 100 : null
     }
   };
-  const synthesis = deterministicFallback(synthesisInput);
-  const twitchAccount = twitch.accounts.get(payload.streamer_id);
+  const synthesis = provisionalTriage(synthesisInput);
   const incident = createIncident({
     incident_id: `sos-${activatedAt}-${randomBytes(4).toString('hex')}`, threat_level: synthesis.threat_level,
     module: payload.module_type, location: payload.location, summary: synthesis.summary,
     recommended_action: synthesis.recommended_action, status: 'PENDING_DISPATCH', created_at: new Date(activatedAt).toISOString(),
-    source: payload.source, stream_url: twitchAccount ? `https://www.twitch.tv/${twitchAccount.login}` : null,
+    source: payload.source, stream_url: null,
     transcript_snippet: payload.audio_transcript_snippet,
-    streamer_contact: { streamer_id: payload.streamer_id, display_name: twitchAccount?.display_name || (demoMode ? 'Demo Streamer' : twitchAccount?.login || 'Streamer'), twitch_login: twitchAccount?.login || '' },
+    streamer_contact: { streamer_id: payload.streamer_id, display_name: demoMode ? 'Demo Streamer' : 'FULE member' },
     dispatch_stage: 'GUARDIANS'
   });
   if (!isIncident(incident)) return { status: 500, body: { error: 'Incident failed schema validation.' } };
@@ -665,18 +617,11 @@ async function createSosIncident(input) {
     });
     timers.set(incident.incident_id, scheduled);
   }
-  void synthesizeIncident(synthesisInput).then(async (aiResult) => {
+  void runTriage(synthesisInput).then(async (triageResult) => {
     if (!incidents.has(incident.incident_id)) return;
-    const updated = await changeIncident(incident.incident_id, aiResult, { event: 'AI_SYNTHESIS_UPDATED', actorId: 'system' });
+    const updated = await changeIncident(incident.incident_id, triageResult, { event: 'TRIAGE_UPDATED', actorId: 'system' });
     void emitIncidentUpdate(updated, 'incident_updated');
   }).catch((error) => log('error', 'incident_synthesis_update_failed', { incident_id: incident.incident_id, error: error.message }));
-  void twitch.createClip(payload.streamer_id).then(async (clipUrl) => {
-    if (!clipUrl) return;
-    const current = incidents.get(incident.incident_id); if (!current) return;
-    const updated = await changeIncident(incident.incident_id, { clip_url: clipUrl }, { event: 'CLIP_ATTACHED', actorId: payload.streamer_id, details: 'Twitch clip captured after SOS activation' });
-    await flushIncidentWrites();
-    await emitIncidentUpdate(updated, 'incident_clip_ready');
-  });
   return { status: 201, body: { incident, streamer_cancel_token: cancelToken, nearby_offered_count: nearbyOffered, nearby_accepted_count: 0 } };
   } finally {
     creatingIncidents.delete(payload.streamer_id);
@@ -727,37 +672,6 @@ async function notifyNearbyGuardians(incident) {
   return responders;
 }
 
-async function markStreamerSafe(streamerId) {
-  const stored = incidentRepository.db
-    ? (await incidentRepository.db('incidents').select('payload', 'streamer_id').where({ streamer_id: streamerId }).whereIn('status', ['PENDING_DISPATCH', 'DISPATCHING', 'ACKNOWLEDGED', 'ESCALATED']).orderBy('created_at', 'desc').first())
-    : null;
-  const current = stored ? { ...createIncident(stored.payload), streamer_id: stored.streamer_id } : [...incidents.values()].find((item) => item.streamer_id === streamerId && ['PENDING_DISPATCH', 'DISPATCHING', 'ACKNOWLEDGED', 'ESCALATED'].includes(item.status));
-  if (!current) return false;
-  if (['SENT', 'ACKNOWLEDGED'].includes(current.dispatch_record?.status)) return false;
-  clearIncidentTimers(current.incident_id);
-  const falseAlarmCount = await recordFalseAlarm(streamerId);
-  const cancelled = await changeIncident(current.incident_id, { status: 'FALSE_ALARM', repeat_offender: falseAlarmCount >= 3 }, { event: 'CHAT_SAFE_FALSE_ALARM', actorId: streamerId, details: `False alarm count: ${falseAlarmCount}${falseAlarmCount >= 3 ? '; repeat-offender flag set.' : ''}` });
-  await deleteCancelCredential(current.incident_id);
-  cancelCredentials.delete(current.incident_id);
-  emitIncidentUpdate(cancelled, 'sos_cancelled'); return true;
-}
-
-const twitch = new TwitchIntegration({
-  clientId: twitchIntegrationEnabled ? process.env.TWITCH_CLIENT_ID : '', clientSecret: twitchIntegrationEnabled ? process.env.TWITCH_CLIENT_SECRET : '',
-  redirectUri: process.env.TWITCH_REDIRECT_URI || 'http://localhost:4000/auth/twitch/callback',
-  rewardId: process.env.TWITCH_SILENT_SOS_REWARD_ID || '',
-  rewardCost: process.env.TWITCH_SILENT_SOS_COST || 1,
-  persistence: twitchAccountStore,
-  onConnectionState: ({ user_id, status, details }) => writeAudit({
-    event: 'TWITCH_EVENTSUB_CONNECTION_STATE', actor_id: user_id, details: `${status}: ${details}`
-  }),
-  onSos: async ({ streamer_id, source, audio_transcript_snippet }) => {
-    const location = await getStreamerLocation(streamer_id);
-    await createSosIncident({ streamer_id, location, module_type: 'FULE_PROTECT', audio_transcript_snippet, source });
-  },
-  onSafe: markStreamerSafe
-});
-
 async function scheduleDispatch(incident, { contactsDelayMs = 30_000, dispatchDelayMs = 60_000 } = {}) {
   const incidentId = incident.incident_id;
   if (redisEnabled) {
@@ -776,25 +690,6 @@ async function scheduleDispatch(incident, { contactsDelayMs = 30_000, dispatchDe
     onDispatch: () => sendToDispatch(incidentId, incident.threat_level === 'CRITICAL' ? 'CRITICAL_THREAT' : 'T_PLUS_60')
   });
   timers.set(incidentId, scheduled);
-}
-
-function consumeInviteAttempt(key, limit = 8) {
-  const now = Date.now();
-  const active = (inviteAttempts.get(key) || []).filter((time) => time > now - 60_000);
-  if (active.length >= limit) {
-    inviteAttempts.set(key, active);
-    return false;
-  }
-  active.push(now);
-  inviteAttempts.set(key, active);
-  if (inviteAttempts.size > 10_000) {
-    for (const [attemptKey, timestamps] of inviteAttempts) {
-      const recent = timestamps.filter((time) => time > now - 60_000);
-      if (recent.length) inviteAttempts.set(attemptKey, recent);
-      else inviteAttempts.delete(attemptKey);
-    }
-  }
-  return true;
 }
 
 // Resume dispatch/escalation clocks for durable incidents after a process restart.
@@ -828,13 +723,16 @@ io.use(async (socket, next) => {
       if (count > (Number(process.env.SOCKET_CONNECT_RATE_LIMIT) || 2_000)) return next(new Error('Connection rate limit exceeded'));
     } catch { return next(new Error('Shared connection limiter is unavailable.')); }
   }
-  const token = socket.handshake.auth?.guardianToken;
-  const guardian = authenticateGuardian(token);
-  if (token && !guardian) return next(new Error('Guardian session is invalid or expired'));
-  if (guardian) {
-    socket.data.guardianId = guardian.guardian_id;
-    socket.data.guardianExpiresAt = guardian.expires_at;
+  const token = socket.handshake.auth?.accessToken;
+  const account = token ? authenticateAccess(token) : null;
+  if (token && !account) return next(new Error('Account session is invalid or expired'));
+  if (account && ['guardian', 'admin'].includes(account.role)) {
+    socket.data.guardianId = account.account_id;
+    socket.data.guardianExpiresAt = account.expires_at;
     socket.data.role = 'guardian';
+  } else if (account) {
+    socket.data.accountId = account.account_id;
+    socket.data.role = account.role;
   } else {
     socket.data.role = 'public';
   }
@@ -854,8 +752,7 @@ app.get('/api/health', async (_req, res) => {
     catch { redisStatus = 'degraded'; }
   }
   const snapshot = buildDegradedSnapshot({
-    database, redis: redisStatus, ai: incidentAiHealth(),
-    twitch: !twitchIntegrationEnabled ? 'disabled' : !twitch.configured() ? 'unconfigured' : twitch.requestCircuit.snapshot().state === 'open' ? 'circuit_open' : 'available',
+    database, redis: redisStatus, triage: triageHealth(),
     dispatch: dispatchProvider.name === 'SimulatedDispatch' ? 'simulated' : dispatchProvider.name === 'UnconfiguredDispatch' ? 'unconfigured' : 'available'
   });
   return res.json(snapshot);
@@ -895,6 +792,10 @@ app.post('/api/auth/refresh', requestLimit({ limit: 20, windowMs: 60_000 }), asy
   try { return res.json(await refreshAccount(req.body?.refresh_token)); }
   catch (error) { return res.status(401).json({ error: error.message }); }
 });
+app.post('/api/auth/logout', requestLimit({ limit: 20, windowMs: 60_000 }), async (req, res) => {
+  try { return res.json({ revoked: await revokeRefreshToken(req.body?.refresh_token) }); }
+  catch (error) { return res.status(503).json({ error: error.message }); }
+});
 app.post('/api/auth/guardian-request', async (req, res) => {
   const identity = authenticateAccess(reqToken(req));
   if (!identity || identity.role !== 'user') return res.status(403).json({ error: 'User account required.' });
@@ -915,50 +816,12 @@ app.post('/api/admin/guardians/:accountId/approve', async (req, res) => {
   catch (error) { return res.status(503).json({ error: error.message }); }
 });
 
-app.get('/auth/twitch', async (_req, res) => {
-  if (!twitchIntegrationEnabled) return res.status(404).send('Twitch integration is disabled. Set TWITCH_INTEGRATION_ENABLED=true to enable it.');
-  if (!twitch.configured()) return res.status(503).send('Twitch OAuth is not configured. Set backend Twitch credentials.');
-  const state = await twitch.createLoginState();
-  res.cookie(oauthStateCookie, state, { httpOnly: true, sameSite: 'lax', secure: parsedAllowedOrigin.protocol === 'https:', maxAge: 10 * 60 * 1000, path: '/auth/twitch/callback' });
-  res.redirect(twitch.loginUrl(state));
-});
-
-app.get('/auth/twitch/callback', async (req, res) => {
-  if (!twitchIntegrationEnabled) return res.status(404).send('Twitch integration is disabled.');
-  const state = String(req.query.state || '');
-  const validState = await twitch.consumeLoginState(state, getCookie(req, oauthStateCookie));
-  res.clearCookie(oauthStateCookie, { httpOnly: true, sameSite: 'lax', secure: parsedAllowedOrigin.protocol === 'https:', path: '/auth/twitch/callback' });
-  if (!validState) return res.status(400).send('Invalid or expired Twitch authorization state.');
-  if (req.query.error || typeof req.query.code !== 'string') return res.status(400).send('Twitch authorization was not completed.');
-  try {
-    const result = await twitch.finishLogin(req.query.code);
-    res.cookie(sessionCookie, result.session, { httpOnly: true, sameSite: sessionCookieSameSite, secure: parsedAllowedOrigin.protocol === 'https:', maxAge: twitchAccountStore.durable ? 10 * 60 * 1000 : 7 * 24 * 60 * 60 * 1000, path: '/' });
-    res.redirect(allowedOrigin);
-  } catch (error) { log('error', 'twitch_login_failed', { request_id: req.id, error: error.message }); res.status(502).send('Twitch login failed.'); }
-});
-
-app.get('/api/twitch/session', requestLimit({ limit: Number(process.env.FULE_TWITCH_SESSION_LIMIT) || 60, windowMs: 60_000 }), async (req, res) => {
-  const user = await getTwitchUser(req);
-  const connection = user && twitch.connections.get(user.id);
-  return res.json({ user, integration_enabled: twitchIntegrationEnabled, eventsub_status: connection?.ready ? 'connected' : user ? 'connecting' : 'disconnected' });
-});
-app.post('/auth/twitch/logout', async (req, res) => {
-  const parsed = String(req.headers.cookie || '').split(';').map((item) => item.trim()).find((item) => item.startsWith(`${sessionCookie}=`));
-  if (parsed) {
-    try {
-      const session = decodeURIComponent(parsed.slice(sessionCookie.length + 1));
-      const user = await twitch.sessionAsync(session);
-      await twitch.logout(session);
-      if (user) { streamerLocations.delete(user.id); if (redis) await redis.del(`fule:streamer-location:${user.id}`); }
-    } catch { /* Ignore malformed cookie values. */ }
-  }
-  res.clearCookie(sessionCookie, { httpOnly: true, sameSite: sessionCookieSameSite, secure: parsedAllowedOrigin.protocol === 'https:', path: '/' }); res.json({ ok: true });
-});
 app.post('/api/streamer/location', async (req, res) => {
-  const streamer = await getTwitchUser(req); if (!streamer) return res.status(401).json({ error: 'Twitch streamer login required.' });
-  const validated = validateSosPayload({ streamer_id: streamer.id, location: req.body?.location, module_type: 'FULE_PROTECT', source: 'button' });
+  const identity = await getStreamerIdentity(req);
+  if (!identity) return res.status(401).json({ error: 'Sign in to save your private location.' });
+  const validated = validateSosPayload({ streamer_id: identity.id, location: req.body?.location, module_type: 'FULE_PROTECT', source: 'button' });
   if (!validated.ok) return res.status(400).json({ error: validated.error });
-  await saveStreamerLocation(streamer.id, validated.value.location);
+  await saveStreamerLocation(identity.id, validated.value.location);
   while (streamerLocations.size > 2_000) streamerLocations.delete(streamerLocations.keys().next().value);
   return res.json({ ok: true });
 });
@@ -987,7 +850,7 @@ async function authorizeSafeWalk(req, walkId) {
 
 app.post('/api/safe-walks', requestLimit({ limit: 5, windowMs: 60_000 }), async (req, res) => {
   const identity = await getStreamerIdentity(req, req.body?.streamer_id);
-  if (!identity) return res.status(401).json({ error: 'Connect Twitch before starting a safe walk.' });
+  if (!identity) return res.status(401).json({ error: 'Sign in with a FULE account before starting a safe walk.' });
   const { destination, eta_minutes: etaMinutes, check_in_interval_minutes: interval, safe_pin: safePin, duress_pin: duressPin, location } = req.body || {};
   if (typeof destination !== 'string' || destination.trim().length < 2 || destination.length > 160) return res.status(400).json({ error: 'Enter a destination between 2 and 160 characters.' });
   if (!Number.isInteger(etaMinutes) || etaMinutes < 1 || etaMinutes > 720 || !Number.isInteger(interval) || interval < 1 || interval > 60) return res.status(400).json({ error: 'ETA must be 1–720 minutes and check-in interval 1–60 minutes.' });
@@ -1018,7 +881,7 @@ function validPushEndpoint(value) {
 
 app.post('/api/safe-walks/push-subscription', async (req, res) => {
   const identity = await getStreamerIdentity(req, req.body?.streamer_id);
-  if (!identity) return res.status(401).json({ error: 'Connect Twitch before enabling safe-walk notifications.' });
+  if (!identity) return res.status(401).json({ error: 'Sign in with a FULE account before enabling notifications.' });
   const subscription = req.body?.subscription;
   if (!subscription || !validPushEndpoint(subscription.endpoint)
     || typeof subscription.keys?.p256dh !== 'string' || subscription.keys.p256dh.length > 256
@@ -1030,7 +893,7 @@ app.post('/api/safe-walks/push-subscription', async (req, res) => {
 
 app.delete('/api/safe-walks/push-subscription', async (req, res) => {
   const identity = await getStreamerIdentity(req, req.body?.streamer_id);
-  if (!identity) return res.status(401).json({ error: 'Connect Twitch before managing safe-walk notifications.' });
+  if (!identity) return res.status(401).json({ error: 'Sign in with a FULE account before managing notifications.' });
   if (!validPushEndpoint(req.body?.endpoint)) return res.status(400).json({ error: 'A valid Web Push endpoint is required.' });
   await safetyFeatureStore.removePushSubscription(identity.id, req.body.endpoint);
   return res.json({ ok: true });
@@ -1068,15 +931,6 @@ app.post('/api/safe-walks/:walkId/cancel', async (req, res) => {
   if (!cancelled) return res.status(409).json({ error: 'Safe walk is already closed.' });
   writeAudit({ event: 'SAFE_WALK_CANCELLED', actor_id: record.walk.streamer_id, details: record.walk.walk_id });
   return res.json({ ok: true, status: 'CANCELLED' });
-});
-
-app.post('/api/guardians/verify', requestLimit({ limit: Number(process.env.FULE_GUARDIAN_VERIFY_LIMIT) || 8, windowMs: 60_000 }), (req, res) => {
-  if (!demoMode) return res.status(410).json({ error: 'Invite verification is disabled. Register, request guardian status, and wait for administrator approval.' });
-  const key = req.ip || req.socket.remoteAddress || 'unknown';
-  if (!consumeInviteAttempt(key, Number(process.env.FULE_GUARDIAN_VERIFY_LIMIT) || 8)) { res.set('Retry-After', '60'); return res.status(429).json({ error: 'Too many invite attempts. Try again in one minute.' }); }
-  const verified = verifyGuardianInvite(req.body?.invite_code, { allowDemo: demoMode });
-  if (!verified) return res.status(401).json({ error: 'Invalid or inactive guardian invite.' });
-  return res.json(verified);
 });
 
 app.post('/api/guardians/duty', async (req, res) => {
@@ -1215,21 +1069,21 @@ app.get('/api/incidents/:incidentId/evidence/:chunkId', async (req, res) => {
 
 app.get('/api/streamer/trusted-contacts', requestLimit({ limit: 30, windowMs: 60_000 }), async (req, res) => {
   const identity = await getStreamerIdentity(req, req.query?.streamer_id);
-  if (!identity) return res.status(401).json({ error: 'Connect your Twitch account to manage trusted contacts.' });
+  if (!identity) return res.status(401).json({ error: 'Sign in with a FULE account to manage your trusted circle.' });
   return res.json({ contacts: await loadTrustedContactsFresh(identity.id) });
 });
 
 app.put('/api/streamer/trusted-contacts', requestLimit({ limit: 10, windowMs: 60_000 }), async (req, res) => {
   const identity = await getStreamerIdentity(req, req.body?.streamer_id);
-  if (!identity) return res.status(401).json({ error: 'Connect your Twitch account to manage trusted contacts.' });
+  if (!identity) return res.status(401).json({ error: 'Sign in with a FULE account to manage your trusted circle.' });
   const contacts = req.body?.contacts;
   if (!Array.isArray(contacts) || contacts.length > 3) return res.status(400).json({ error: 'Add no more than three trusted contacts.' });
   const normalized = [];
   for (const contact of contacts) {
     const name = typeof contact?.name === 'string' ? contact.name.trim().slice(0, 80) : '';
-    const phone = typeof contact?.phone === 'string' ? contact.phone.trim() : '';
-    if (!name || !/^\+[1-9]\d{7,14}$/.test(phone)) return res.status(400).json({ error: 'Each contact needs a name and an E.164 phone number, such as +14155550123.' });
-    normalized.push({ name, phone });
+    const email = typeof contact?.email === 'string' ? contact.email.trim().toLowerCase() : '';
+    if (!name || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 320) return res.status(400).json({ error: 'Each trusted circle member needs a name and FULE account email.' });
+    normalized.push({ name, email });
   }
   await saveTrustedContacts(identity.id, normalized);
   await flushIncidentWrites();
@@ -1263,13 +1117,12 @@ app.post('/api/dispatch/:incidentId/action', requestLimit({ limit: 60, windowMs:
 });
 
 app.post('/api/sos', requestLimit({ limit: Number(process.env.FULE_SOS_IP_LIMIT) || 6, windowMs: 60_000 }), async (req, res) => {
-  const user = await getTwitchUser(req);
   const account = authenticateAccess(getBearerToken(req));
   const loadTestAuthorized = demoMode && Boolean(loadTestTokenHash) && tokenMatches(req.get('x-fule-load-test-token'), loadTestTokenHash);
-  const authenticatedStreamer = (user && req.body?.streamer_id === user.id) || (account && ['user', 'guardian'].includes(account.role) && req.body?.streamer_id === account.account_id);
-  if (!authenticatedStreamer && !loadTestAuthorized && !(demoMode && isLoopbackRequest(req))) return res.status(401).json({ error: 'Sign in with the matching Twitch streamer account to trigger SOS.' });
+  const authenticatedStreamer = account && ['user', 'guardian', 'admin'].includes(account.role) && req.body?.streamer_id === account.account_id;
+  if (!authenticatedStreamer && !loadTestAuthorized && !(demoMode && isLoopbackRequest(req))) return res.status(401).json({ error: 'Sign in with the matching FULE account to trigger SOS.' });
   const source = req.body?.source || 'button';
-  if (source !== 'button' && !(demoMode && isLoopbackRequest(req))) return res.status(400).json({ error: 'Chat and redeem incidents must come from verified Twitch EventSub events.' });
+  if (!['button', 'shake', 'keyboard'].includes(source)) return res.status(400).json({ error: 'SOS source must be button, shake, or keyboard.' });
   const idempotencyKey = String(req.get('Idempotency-Key') || '').trim();
   if (!idempotencyKey) return res.status(400).json({ error: 'Idempotency-Key header is required for SOS requests.' });
   if (!/^[\w:.-]{8,180}$/.test(idempotencyKey)) return res.status(400).json({ error: 'Idempotency-Key must contain 8–180 safe characters.' });
@@ -1318,7 +1171,7 @@ app.post('/api/sos', requestLimit({ limit: Number(process.env.FULE_SOS_IP_LIMIT)
   }
   catch (error) {
     if (error.code === '23505') return res.status(409).json({ error: 'An active incident already exists for this streamer.' });
-    Sentry.captureException(error); log('error', 'sos_create_failed', { request_id: req.id, error: error.message });
+    log('error', 'sos_create_failed', { request_id: req.id, error: error.message });
     return res.status(500).json({ error: 'Could not create incident. Please retry.' });
   } finally { if (req.get('Idempotency-Key')) creatingIdempotency.delete(`${req.body?.streamer_id}:${createHash('sha256').update(String(req.get('Idempotency-Key'))).digest('hex')}`); }
 });
@@ -1416,7 +1269,7 @@ io.on('connection', (socket) => {
   });
 });
 
-if (typeof Sentry.setupExpressErrorHandler === 'function') Sentry.setupExpressErrorHandler(app);
+// Errors are logged locally; deployment can collect stdout with a self-hosted stack.
 
 await startBackgroundWorkers({
   onContact: contactTrustedPeople,
@@ -1435,7 +1288,6 @@ const streamRetentionTimer = setInterval(() => { void runRetentionCleanup().catc
 streamRetentionTimer.unref?.();
 void runRetentionCleanup().catch((error) => log('error', 'retention_cleanup_failed', { taxonomy: 'dependency', error: error.message }));
 await verifyRuntimeInfrastructure();
-if (twitchIntegrationEnabled) await twitch.hydrate();
 
 httpServer.listen(port, () => log('info', 'server_listening', { port, mode: demoMode ? 'demo' : 'production', storage: incidentRepository.db ? 'postgresql' : 'file-demo', redis: redisEnabled }));
 
@@ -1449,7 +1301,6 @@ app.use((error, _req, res, _next) => {
   if (res.headersSent) return;
   if (error.type === 'entity.too.large') return res.status(413).json({ error: 'Request body is too large.' });
   if (error instanceof SyntaxError) return res.status(400).json({ error: 'Malformed JSON request.' });
-  Sentry.captureException(error);
   log('error', 'request_middleware_error', { request_id: _req.id, error: error.message, taxonomy: error.type ? 'client' : 'internal' });
   return res.status(500).json({ error: 'Request could not be processed.' });
 });
@@ -1463,7 +1314,7 @@ async function gracefulShutdown(signal) {
   for (const incidentId of timers.keys()) clearIncidentTimers(incidentId);
   await flushIncidentWrites();
   await new Promise((resolve) => io.close(resolve));
-  await Promise.allSettled([twitch.shutdown(), closeRuntimeInfrastructure(), closeIncidentStore(), Sentry.flush(2_000)]);
+  await Promise.allSettled([closeRuntimeInfrastructure(), closeIncidentStore()]);
   process.exit(0);
 }
 process.once('SIGTERM', () => { void gracefulShutdown('SIGTERM'); });

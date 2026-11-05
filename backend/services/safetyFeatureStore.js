@@ -126,8 +126,12 @@ export const safetyFeatureStore = {
     return { accepted: true, count: list.size };
   },
   async saveNearbyOffers(incidentId, responders) {
+    // Empty offers are the common path when nobody is on duty. Persisting an
+    // empty Set still rewrites the entire demo state file for every SOS,
+    // adding synchronous filesystem work to the alert hot path without
+    // changing any observable state.
+    if (!responders.length) return;
     if (incidentRepository.db) {
-      if (!responders.length) return;
       await incidentRepository.db('nearby_guardian_offers').insert(responders.map((guardian, index) => ({ incident_id: incidentId, guardian_id: guardian.guardian_id, priority: index + 1, approximate_area: guardian.approximate_area }))).onConflict(['incident_id', 'guardian_id']).ignore();
     } else { memoryLists.set(`offers:${incidentId}`, new Set(responders.map((guardian) => guardian.guardian_id))); persistDemoState(); }
   },

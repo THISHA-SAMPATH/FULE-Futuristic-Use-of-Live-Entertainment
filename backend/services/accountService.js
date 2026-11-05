@@ -41,20 +41,28 @@ export async function refreshAccount(token) {
     return { account: { account_id: row.account_id, email: row.email, role: row.role }, access_token: accessToken(row), refresh_token: await issueRefresh(row, transaction) };
   });
 }
+export async function revokeRefreshToken(token) {
+  if (!db || typeof token !== 'string' || !token) return false;
+  return (await db('refresh_tokens').where({ token_hash: hashToken(token) }).whereNull('revoked_at').update({ revoked_at: new Date() })) > 0;
+}
 export function authenticateAccess(token) {
-  try { const payload = jwt.verify(String(token || ''), secret, { issuer: 'fule' }); return { account_id: payload.sub, role: payload.role }; }
+  try {
+    const payload = jwt.verify(String(token || ''), secret, { issuer: 'fule' });
+    if (!['user', 'guardian', 'admin'].includes(payload.role) || typeof payload.sub !== 'string') return null;
+    return { account_id: payload.sub, role: payload.role, expires_at: payload.exp * 1000 };
+  }
   catch { return null; }
 }
 
-export function createTrustedContactStreamToken({ incidentId, streamerId, phone }) {
-  const phoneHash = hashToken(String(phone || ''));
-  return jwt.sign({ sub: `trusted-${phoneHash.slice(0, 20)}`, role: 'trusted_contact', incident_id: incidentId, streamer_id: streamerId, phone_hash: phoneHash }, secret, { expiresIn: '10m', issuer: 'fule' });
+export function createTrustedContactStreamToken({ incidentId, streamerId, contactEmail }) {
+  const contactHash = hashToken(String(contactEmail || '').toLowerCase());
+  return jwt.sign({ sub: `trusted-${contactHash.slice(0, 20)}`, role: 'trusted_contact', incident_id: incidentId, streamer_id: streamerId, contact_hash: contactHash }, secret, { expiresIn: '10m', issuer: 'fule' });
 }
 
 export function authenticateTrustedContactStreamToken(token, incidentId, streamerId) {
   try {
     const payload = jwt.verify(String(token || ''), secret, { issuer: 'fule' });
-    return payload.role === 'trusted_contact' && payload.incident_id === incidentId && payload.streamer_id === streamerId && typeof payload.phone_hash === 'string'
+    return payload.role === 'trusted_contact' && payload.incident_id === incidentId && payload.streamer_id === streamerId && typeof payload.contact_hash === 'string'
       ? { id: payload.sub, role: payload.role }
       : null;
   } catch { return null; }

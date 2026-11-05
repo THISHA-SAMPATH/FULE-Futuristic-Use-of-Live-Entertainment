@@ -2,7 +2,7 @@ import { INCIDENT_MODULES, INCIDENT_SOURCES } from '../../shared/incident.mjs';
 
 export function validateSosPayload(body) {
   if (!body || typeof body !== 'object' || Array.isArray(body)) return { ok: false, error: 'A JSON object is required.' };
-  const allowedKeys = new Set(['streamer_id', 'location', 'module_type', 'audio_transcript_snippet', 'source', 'silent_public', 'event_id']);
+  const allowedKeys = new Set(['streamer_id', 'location', 'module_type', 'audio_transcript_snippet', 'source', 'silent_public', 'risk_level']);
   const unknown = Object.keys(body).find((key) => !allowedKeys.has(key));
   if (unknown) return { ok: false, error: `Unsupported SOS field: ${unknown}.` };
   if (!body.location || typeof body.location !== 'object' || Array.isArray(body.location)) return { ok: false, error: 'location must be an object.' };
@@ -27,7 +27,8 @@ export function validateSosPayload(body) {
   }
   if (typeof body.audio_transcript_snippet === 'string' && body.audio_transcript_snippet.length > 4000) return { ok: false, error: 'audio_transcript_snippet cannot exceed 4000 characters.' };
   if (body.silent_public != null && typeof body.silent_public !== 'boolean') return { ok: false, error: 'silent_public must be a boolean.' };
-  if (body.event_id != null && (typeof body.event_id !== 'string' || body.event_id.length > 180 || !/^[\w:.-]+$/.test(body.event_id))) return { ok: false, error: 'event_id must be a valid Twitch event identifier.' };
+  const risk_level = body.risk_level || 'standard';
+  if (!['standard', 'elevated', 'high'].includes(risk_level)) return { ok: false, error: 'risk_level must be standard, elevated, or high.' };
   return {
     ok: true,
     value: {
@@ -36,8 +37,8 @@ export function validateSosPayload(body) {
       module_type,
       audio_transcript_snippet: String(body.audio_transcript_snippet || ''),
       source,
+      risk_level,
       ...(body.silent_public === true ? { silent_public: true } : {}),
-      ...(body.event_id ? { event_id: body.event_id } : {})
     }
   };
 }
