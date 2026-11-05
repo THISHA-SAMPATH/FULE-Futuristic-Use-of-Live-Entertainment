@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { io } from 'socket.io-client';
-import { AlertTriangle, BellRing, Shield, X } from 'lucide-react';
+import { AlertTriangle, ArrowRight, BellRing, Shield, ShieldCheck, UsersRound, X } from 'lucide-react';
 import Header from './components/Header.jsx';
 import Sidebar from './components/Sidebar.jsx';
 import Hero from './components/Hero.jsx';
@@ -9,7 +9,7 @@ import NetworkPulse from './components/NetworkPulse.jsx';
 import MapCard from './components/MapCard.jsx';
 import { SosButton, CancelToast } from './components/SosButton.jsx';
 import { LiveStreamsSection, TopGuardiansSection } from './components/CommunitySections.jsx';
-import { SafetyCategories, FeatureBanners } from './components/HomeSections.jsx';
+import { CategoryChips } from './components/CommunitySections.jsx';
 import { DispatchTimeline, OperatorBrief } from './components/DispatchTimeline.jsx';
 import TrustedContacts from './components/TrustedContacts.jsx';
 import DemoTriggers from './components/DemoTriggers.jsx';
@@ -191,24 +191,41 @@ export default function App() {
     }, 350);
   }
 
+  function setUpSafeCircle() {
+    if (!streamUser && !DEMO_MODE) {
+      document.querySelector('.standalone-account-button')?.click();
+      return;
+    }
+    const trustedCircle = document.getElementById('trusted-circle');
+    if (trustedCircle) {
+      trustedCircle.open = true;
+      trustedCircle.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      (trustedCircle.querySelector('input, button') || trustedCircle.querySelector('summary'))?.focus({ preventScroll: true });
+      return;
+    }
+    document.querySelector('.standalone-account-button')?.click();
+  }
+
   const carouselStreams = DEMO_MODE ? DEMO_STREAMS : featuredStream ? [featuredStream] : [];
   return <div className="fule-shell gamey-shell" id="home" data-theme={active ? 'alert' : 'calm'}>
     <Header search={search} onSearch={setSearch} onTrigger={triggerSos} onOpenAlerts={() => setAlertsOpen(true)} alertsOpen={alertsOpen} sending={sending} active={Boolean(active)} user={twitchUser} account={fuleAccount} twitchEnabled={twitchEnabled} unreadCount={activeCount} demoMode={DEMO_MODE} category={category} onCategorySelect={setCategory}/>
     <Sidebar connection={socketStatus} role={role} demoMode={DEMO_MODE} unreadCount={activeCount} incidents={[...incidents, ...demoAlerts, ...(activeIncident ? [activeIncident] : [])]} onTrigger={triggerSos} sending={sending} active={Boolean(active)} onOpenAlerts={() => setAlertsOpen(true)} onOpenInsights={() => { const drawer = document.querySelector('.insights-drawer'); if (drawer) { drawer.open = true; drawer.scrollIntoView({ behavior: 'smooth', block: 'center' }); } }}/>
     <main className="dashboard-content">
-      <div className="connection-strip"><span className="connection-state"><i className={DEMO_MODE || socketStatus === 'online' ? 'on' : ''}/>{DEMO_MODE ? 'Demo community live' : socketStatus === 'online' ? 'Safety network live' : socketStatus === 'offline' ? 'Reconnecting to network' : 'Connecting to network'}</span><span className="privacy-note"><Shield size={13}/>Precise location is shared only with verified guardians</span>{!DEMO_MODE && !twitchUser && <StandaloneAccount account={fuleAccount} onAccount={setFuleAccount}/>}</div>
+      <div className="connection-strip">{!DEMO_MODE && <span className="connection-state"><i className={socketStatus === 'online' ? 'on' : ''}/>{socketStatus === 'online' ? 'Safety network is connected' : socketStatus === 'offline' ? 'Reconnecting to the safety network' : 'Connecting to the safety network'}</span>}<span className="privacy-note"><Shield size={13}/>Precise location is shared only with verified guardians</span>{!DEMO_MODE && !twitchUser && <StandaloneAccount account={fuleAccount} onAccount={setFuleAccount}/>}</div>
       {trustedStreamAccess && <section className="active-response-card trusted-stream-entry"><h2>Private stream shared with you</h2><p>This incident stream link is limited to the invited trusted contact and expires shortly.</p><IncidentLiveStream incident={{ incident_id: trustedStreamAccess.incidentId, status: 'PENDING_DISPATCH' }} streamerId="" streamerToken="" role="trusted_contact" guardianToken={trustedStreamAccess.token} compact/></section>}
       {error && <div className="global-error" role="alert"><AlertTriangle size={16}/><span>{error}</span>{error.includes('connect Twitch') && twitchEnabled && <a href={`${API_URL}/auth/twitch`}>Connect Twitch</a>}<button onClick={() => setError('')} aria-label="Dismiss error">×</button></div>}
       <div className="main-dashboard-grid gamey-grid"><div className="feed-column gamey-feed">
-        <Hero active={Boolean(active)} featuredStream={featuredStream} carouselStreams={carouselStreams} demoMode={DEMO_MODE} onOpenAlerts={() => setAlertsOpen(true)} onTrigger={triggerSos} sending={sending}/>
-        <SafeWalkPanel demoMode={DEMO_MODE} streamer={streamUser} activeIncident={activeIncident} onEmergency={handleSafeWalkEmergency}/>
-        <section className="active-response-card" hidden={!activeIncident}><div className="active-response-heading"><span>LIVE RESPONSE STATUS</span><strong>{activeIncident?.dispatch_record?.status || 'GUARDIANS ALERTED'}</strong></div><p className="nearby-response-count" aria-live="polite">{nearbyAccepted} nearby {nearbyAccepted === 1 ? 'guardian is' : 'guardians are'} coming</p><IncidentLiveStream ref={liveStreamRef} incident={activeIncident} streamerId={activeIncident?.streamer_id || streamUser?.id || 'demo-streamer'} streamerToken={evidenceToken} accountAccessToken={fuleAccount?.access_token || ''} role="streamer" autoStart={streamRequested}/>{activeIncident && <><DispatchTimeline incident={activeIncident}/><OperatorBrief incident={activeIncident} privateLocation/><EvidenceRecorder incident={activeIncident} streamerToken={evidenceToken}/>{activeIncident.repeat_offender && <p className="repeat-offender-flag">Repeat false-alarm pattern flagged for review.</p>}</>}</section>
-        <SafetyCategories selected={category} onSelect={setCategory}/>
-        <FeatureBanners/>
+        <Hero active={Boolean(active)} featuredStream={featuredStream} carouselStreams={carouselStreams} demoMode={DEMO_MODE} onOpenAlerts={() => setAlertsOpen(true)} onSetUpCircle={setUpSafeCircle}/>
+        <section className="active-response-card" hidden={!activeIncident}><div className="active-response-heading"><span>Live response</span><strong>{activeIncident?.dispatch_record?.status || 'Guardians alerted'}</strong></div><p className="nearby-response-count" aria-live="polite">{nearbyAccepted} nearby {nearbyAccepted === 1 ? 'guardian is' : 'guardians are'} coming</p><IncidentLiveStream ref={liveStreamRef} incident={activeIncident} streamerId={activeIncident?.streamer_id || streamUser?.id || 'demo-streamer'} streamerToken={evidenceToken} accountAccessToken={fuleAccount?.access_token || ''} role="streamer" autoStart={streamRequested}/>{activeIncident && <><DispatchTimeline incident={activeIncident}/><OperatorBrief incident={activeIncident} privateLocation/>{activeIncident.repeat_offender && <p className="repeat-offender-flag">This account has a repeated false-alarm pattern and needs review.</p>}</>}</section>
+        <section className="safety-category-filter" id="communities" aria-label="Filter safety communities"><span>Find your people</span><CategoryChips selected={category} onSelect={setCategory}/></section>
+        <section className="safety-bento" aria-label="Your safety tools">
+          <div className="bento-card safe-walk-bento" id="safe-walk"><SafeWalkPanel demoMode={DEMO_MODE} streamer={streamUser} activeIncident={activeIncident} onEmergency={handleSafeWalkEmergency}/></div>
+          <div className="bento-card trusted-bento"><div className="bento-card-heading"><span className="bento-illustration trusted-illustration"><UsersRound size={21}/></span><div><h2>Your trusted circle</h2><p>People FULE can reach if you need backup.</p></div></div><TrustedContacts streamerId={streamUser?.id || 'demo-streamer'} connected={Boolean(streamUser)} accessToken={fuleAccount?.access_token || ''} demoMode={DEMO_MODE} compact/></div>
+          <div className="bento-card evidence-bento"><div className="bento-card-heading"><span className="bento-illustration evidence-illustration"><ShieldCheck size={21}/></span><div><h2>Evidence vault</h2><p>Private recordings and incident case files.</p></div></div><p className="bento-detail">When an incident is active, choose encrypted audio or video capture. Verified guardians can review the tamper-evident case file.</p>{activeIncident ? <EvidenceRecorder incident={activeIncident} streamerToken={evidenceToken}/> : <button className="bento-text-link" type="button" onClick={() => setAlertsOpen(true)}>View incident records <ArrowRight size={14}/></button>}</div>
+          <div className="bento-card guardian-bento" id="guardians"><TopGuardiansSection demoMode={DEMO_MODE} search={search} title="Guardians nearby"/></div>
+        </section>
         <LiveStreamsSection demoMode={DEMO_MODE} incidents={filteredIncidents} search={search} category={category}/>
-        <TopGuardiansSection demoMode={DEMO_MODE} search={search}/>
         {DEMO_MODE && <details className="demo-drawer"><summary>Demo controls <span>Simulated triggers · no real contacts</span></summary><DemoTriggers onTrigger={triggerSos} disabled={Boolean(active)} sending={sending}/></details>}
-        <TrustedContacts streamerId={streamUser?.id || 'demo-streamer'} connected={Boolean(streamUser)} accessToken={fuleAccount?.access_token || ''} demoMode={DEMO_MODE}/>
         <details className="insights-drawer"><summary>Demo &amp; Insights <span>Network pulse and anonymized map</span></summary><div className="insights-content"><NetworkPulse stats={networkStats} demoMode={DEMO_MODE}/><MapCard incidents={incidents} demoMode={DEMO_MODE}/></div></details>
         <section className="alarm-option-card" id="settings"><span className="alarm-option-icon"><BellRing size={17}/></span><span><strong>Loud emergency alarm</strong><small>Play an audible signal during your active SOS.</small></span><input type="checkbox" checked={alarmEnabled} onChange={(event) => setAlarmEnabled(event.target.checked)} aria-label="Toggle loud emergency alarm"/><button type="button" className="shake-sos-enable" onClick={enableShakeSOS} disabled={motionReady} aria-label="Enable shake gesture for emergency SOS">{motionReady ? 'Shake SOS enabled' : 'Enable shake SOS'}</button></section>
       </div></div>

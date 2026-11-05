@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { UserPlus, X } from 'lucide-react';
 import { API_URL } from '../config.js';
 
-export default function TrustedContacts({ streamerId, connected, accessToken = '', demoMode = false }) {
+export default function TrustedContacts({ streamerId, connected, accessToken = '', demoMode = false, id = 'trusted-circle', compact = false }) {
   const [contacts, setContacts] = useState([]);
   const [name, setName] = useState('');
   const [phone, setPhone] = useState('');
@@ -34,7 +34,7 @@ export default function TrustedContacts({ streamerId, connected, accessToken = '
     const next = [...contacts, { name: name.trim(), phone: phone.trim() }];
     await save(next); setName(''); setPhone('');
   }
-  return <details className="trusted-contacts"><summary>Trusted Contacts <span>{contacts.length}/3 · alerted after 30s without guardian acknowledgement</span></summary>
+  return <details className={`trusted-contacts ${compact ? 'is-compact' : ''}`} id={id} open={compact || undefined}><summary>Trusted Contacts <span>{contacts.length}/3 · alerted after 30s without guardian acknowledgement</span></summary>
     {!connected && !demoMode ? <p className="trusted-contact-hint">Sign in with a FULE account or connect Twitch to manage your private trusted contacts.</p> : <>
       <p className="trusted-contact-hint">Their name and phone number stay server-side. FULE sends them an alert if guardians have not acknowledged in 30 seconds.</p>
       <ul>{contacts.map((contact, index) => <li key={`${contact.phone}-${index}`}><span><strong>{contact.name}</strong><small>{contact.phone}</small></span><button type="button" aria-label={`Remove ${contact.name}`} disabled={saving} onClick={() => save(contacts.filter((_, itemIndex) => itemIndex !== index))}><X size={15}/></button></li>)}</ul>

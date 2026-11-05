@@ -1,9 +1,9 @@
 export const DEMO_STREAMS = Object.freeze([
-  { id: 'stream-commute', streamer: 'miraafterdark', initials: 'MA', title: 'Last train, safer together', viewers: 842, guardians: 24, region: 'North Loop', scene: 'violet' },
-  { id: 'stream-campus', streamer: 'campuscompass', initials: 'CC', title: 'Campus walk-home check-in', viewers: 516, guardians: 18, region: 'University District', scene: 'rose' },
-  { id: 'stream-nightline', streamer: 'nightlinecrew', initials: 'NC', title: 'Nightline neighborhood watch', viewers: 1204, guardians: 32, region: 'River Quarter', scene: 'blue' },
-  { id: 'stream-civic', streamer: 'civicafterhours', initials: 'CA', title: 'Community desk · open channel', viewers: 309, guardians: 12, region: 'Market Ward', scene: 'amber' },
-  { id: 'stream-walk', streamer: 'walkwithlee', initials: 'WL', title: 'Walk-along until you’re home', viewers: 677, guardians: 21, region: 'Garden East', scene: 'mint' },
+  { id: 'stream-commute', streamer: 'Mira Santos', initials: 'MS', title: 'Last train through North Loop', viewers: 842, guardians: 24, region: 'North Loop · Midtown', scene: 'violet' },
+  { id: 'stream-campus', streamer: 'Nia Brooks', initials: 'NB', title: 'Walking the South Campus path', viewers: 516, guardians: 18, region: 'South Campus · College Hill', scene: 'rose' },
+  { id: 'stream-nightline', streamer: 'Daniel Kim', initials: 'DK', title: 'Evening check-in by the river', viewers: 1204, guardians: 32, region: 'Riverside East · Old Town', scene: 'blue' },
+  { id: 'stream-civic', streamer: 'Leila Rahman', initials: 'LR', title: 'Market Street community desk', viewers: 309, guardians: 12, region: 'Market Street · Central Ward', scene: 'amber' },
+  { id: 'stream-walk', streamer: 'Jordan Ellis', initials: 'JE', title: 'A walk home through Garden East', viewers: 677, guardians: 21, region: 'Garden East · Lakeside', scene: 'mint' },
 ]);
 
 export const DEMO_GUARDIANS = Object.freeze([
@@ -15,11 +15,11 @@ export const DEMO_GUARDIANS = Object.freeze([
 
 export const DEMO_NETWORK = Object.freeze({ activeGuardians: 128, responseSeconds: 8, resolvedToday: 36 });
 
-const DEMO_AREAS = ['West End · approximate area', 'University District · approximate area', 'River Quarter · approximate area'];
+const DEMO_AREAS = ['North Loop · approximate area', 'South Campus · approximate area', 'Riverside East · approximate area'];
 const DEMO_SUMMARIES = [
-  'A scheduled community check-in missed its window. Nearby guardians are reviewing the stream.',
-  'A streamer requested a private safety check during a late commute.',
-  'Community moderators flagged a request for a trusted contact to follow up.',
+  'A safe-walk check-in is overdue near the North Loop station entrance.',
+  'A student requested a guardian check-in along the South Campus footpath.',
+  'A late commute check-in needs a follow-up near Riverside East tram stop.',
 ];
 
 export function createDemoIncident(index = 0, now = Date.now()) {
