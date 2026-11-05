@@ -10,21 +10,24 @@ import { fileURLToPath } from 'node:url';
 import { INCIDENT_MODULE, createIncident, isIncident, toPublicIncident } from '../shared/incident.mjs';
 import { authenticateGuardian, seedDemoInvite, verifyGuardianInvite } from './services/guardianRegistry.js';
 import { writeAudit } from './services/auditLog.js';
-import { deterministicFallback, synthesizeIncident } from './services/incidentSynthesizer.js';
+import { deterministicFallback, synthesizeIncident, incidentAiHealth } from './services/incidentSynthesizer.js';
 import { createStreamerRateLimiter, validateSosPayload } from './services/sosValidation.js';
 import { TwitchIntegration } from './services/twitchIntegration.js';
-import { incidentRepository, loadIncidents, getIncident, listIncidentPage, listDispatchQueue, persistIncident, removeIncident, loadTrustedContactsFresh, saveTrustedContacts, recordFalseAlarm, flushIncidentWrites, cleanupIncidentData, closeIncidentStore } from './services/incidentStore.js';
+import { incidentRepository, loadIncidents, getIncident as getStoredIncident, listIncidentPage, listDispatchQueue, persistIncident, removeIncident, loadTrustedContactsFresh, saveTrustedContacts, recordFalseAlarm, flushIncidentWrites, cleanupIncidentData, closeIncidentStore } from './services/incidentStore.js';
 import { createDispatchProvider, createEmergencyReport } from './services/dispatchBridge.js';
 import { createEscalationLadder } from './services/escalationLadder.js';
 import { notifyTrustedContacts } from './services/trustedContactNotifier.js';
 import { authenticateAccess, loginAccount, refreshAccount, registerAccount, requestGuardianApproval, approveGuardian } from './services/accountService.js';
 import { redis, redisEnabled, installSocketAdapter, verifyRuntimeInfrastructure, scheduleEscalationJobs, cancelEscalationJobs, scheduleSafeWalkCheckin, scheduleSafeWalkTimeout, cancelSafeWalkJobs, startBackgroundWorkers, closeRuntimeInfrastructure } from './services/runtimeInfrastructure.js';
-import { activeSockets, alertDeliveryLatency, httpRequests, log, metricsRegistry, queueDepth } from './services/securityMetrics.js';
+import { activeSockets, alertDeliveryLatency, httpRequestDuration, httpRequests, log, metricsRegistry, queueDepth, requestContext } from './services/securityMetrics.js';
 import { twitchAccountStore } from './services/twitchAccountStore.js';
 import { createSafeWalkWorkflow, matchNearbyGuardians, safeWalkTokenMatches } from './services/safetyFeatures.js';
 import { safetyFeatureStore } from './services/safetyFeatureStore.js';
 import { EvidenceVault } from './services/evidenceVault.js';
 import { getWebPushPublicKey, sendSafeWalkPush } from './services/webPushNotifier.js';
+import { createTieredRateLimiter } from './services/tieredRateLimiter.js';
+import { buildDegradedSnapshot } from './services/degradedModes.js';
+import { validateJsonValue } from './services/requestValidation.js';
 
 dotenv.config({ path: fileURLToPath(new URL('./.env', import.meta.url)) });
 
@@ -101,6 +104,8 @@ const incidents = new Map(loadIncidents().map((stored) => {
   const incident = { ...createIncident(stored), ...(stored.streamer_id ? { streamer_id: stored.streamer_id } : {}) };
   return [incident.incident_id, incident];
 }));
+const volatileIncidents = new Map();
+let databaseDegraded = false;
 const cancelCredentials = new Map();
 const timers = new Map();
 const inviteAttempts = new Map();
@@ -109,11 +114,13 @@ const sessionCookie = 'fule_twitch_session';
 const oauthStateCookie = 'fule_twitch_oauth_state';
 const sessionCookieSameSite = parsedAllowedOrigin.protocol === 'https:' ? 'none' : 'lax';
 const loadTestTokenHash = process.env.FULE_LOAD_TEST_TOKEN ? hashToken(process.env.FULE_LOAD_TEST_TOKEN).toString('hex') : '';
-const requestBuckets = new Map();
+const tieredLimiter = createTieredRateLimiter({ redis });
 const creatingIncidents = new Set();
 const memoryIdempotency = new Map();
+const creatingIdempotency = new Map();
 const socketConnectionsByIp = new Map();
 const socketAttemptsByIp = new Map();
+let incidentTransitionQueue = Promise.resolve();
 
 async function saveStreamerLocation(streamerId, location) {
   const value = { location, updatedAt: Date.now() };
@@ -136,18 +143,24 @@ app.use((req, res, next) => {
   req.id = String(req.get('x-request-id') || randomBytes(12).toString('hex')).slice(0, 128);
   res.setHeader('x-request-id', req.id);
   res.on('finish', () => {
-    httpRequests.inc({ method: req.method, route: req.route?.path || req.path, status: String(res.statusCode) });
-    log(res.statusCode >= 500 ? 'error' : 'info', 'http_request', { request_id: req.id, method: req.method, path: req.path, status: res.statusCode, duration_ms: Number(process.hrtime.bigint() - req._startedAt) / 1e6 });
+    const durationMs = Number(process.hrtime.bigint() - req._startedAt) / 1e6;
+    const route = String(req.route?.path ? `${req.baseUrl}${req.route.path}` : req.path).replace(/[\w-]{30,}/g, ':id').slice(0, 160);
+    httpRequests.inc({ method: req.method, route, status: String(res.statusCode) });
+    httpRequestDuration.observe({ method: req.method, route, status: String(res.statusCode) }, durationMs / 1000);
+    const fields = { request_id: req.id, method: req.method, route, status: res.statusCode, duration_ms: Number(durationMs.toFixed(2)), taxonomy: res.statusCode >= 500 ? 'internal' : res.statusCode >= 400 ? 'client' : 'none' };
+    log(res.statusCode >= 500 ? 'error' : 'info', 'http_request', fields);
+    if (durationMs >= (Number(process.env.SLOW_REQUEST_MS) || 500)) log('warn', 'slow_request', fields);
   });
   req._startedAt = process.hrtime.bigint();
-  next();
+  requestContext.run({ request_id: req.id }, next);
 });
 app.use(cors({
   origin(origin, callback) {
     return callback(null, isAllowedOrigin(origin) ? origin || false : false);
   },
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Streamer-Evidence-Token', 'X-Safe-Walk-Token'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'Idempotency-Key', 'X-Streamer-Evidence-Token', 'X-Safe-Walk-Token', 'X-Request-Id'],
+  exposedHeaders: ['X-Request-Id', 'Retry-After', 'RateLimit-Limit'],
   credentials: true,
   maxAge: 600
 }));
@@ -166,6 +179,12 @@ app.use((req, res, next) => {
   next();
 });
 app.use(express.json({ limit: '32kb', strict: true, type: 'application/json' }));
+app.use((req, res, next) => {
+  if (!req.is('application/json') || req.body == null) return next();
+  const validation = validateJsonValue(req.body);
+  if (!validation.valid) return res.status(400).json({ error: validation.error });
+  return next();
+});
 
 const evidenceVault = new EvidenceVault({ directory: process.env.EVIDENCE_STORAGE_DIR || './data/evidence', store: safetyFeatureStore });
 
@@ -181,32 +200,23 @@ function enforceRequestSafety(req, res, next) {
   next();
 }
 
-function requestLimit({ limit, windowMs }) {
-  return (req, res, next) => {
-    if (redis) {
-      const key = `fule:ratelimit:${req.ip || req.socket.remoteAddress || 'unknown'}:${req.baseUrl}${req.path}`;
-      redis.eval("local n=redis.call('INCR',KEYS[1]); if n==1 then redis.call('PEXPIRE',KEYS[1],ARGV[1]); end; return {n,redis.call('PTTL',KEYS[1])}", 1, key, windowMs)
-        .then(([count, ttl]) => {
-          if (count > limit) { res.set('Retry-After', String(Math.ceil(ttl / 1000))); return res.status(429).json({ error: 'Request rate limit exceeded.' }); }
-          res.set('RateLimit-Limit', String(limit)); res.set('RateLimit-Remaining', String(Math.max(0, limit - count))); next();
-        }).catch((error) => { log('error', 'redis_rate_limit_failed', { request_id: req.id, error: error.message }); if (process.env.NODE_ENV === 'production') return res.status(503).json({ error: 'Rate limiting service unavailable.' }); next(); });
-      return;
+function requestLimit({ limit, windowMs, global = false }) {
+  return async (req, res, next) => {
+    const account = authenticateAccess(getBearerToken(req));
+    const streamerId = typeof req.body?.streamer_id === 'string' ? req.body.streamer_id : null;
+    const route = `${req.baseUrl}${req.path}`.replace(/[\w-]{30,}/g, ':id') + `:${limit}:${windowMs}`;
+    try {
+      const result = await tieredLimiter.consume({ ip: req.ip || req.socket.remoteAddress || 'unknown', user: account?.account_id || streamerId, route }, global
+        ? { perIp: limit, windowMs }
+        : { perUser: Math.max(limit, Number(process.env.FULE_USER_ROUTE_LIMIT) || limit * 2), perRoute: limit, windowMs });
+      if (!result.allowed) { res.set('Retry-After', String(Math.ceil(result.retry_after_ms / 1000))); return res.status(429).json({ error: 'Request rate limit exceeded.', scope: result.scope }); }
+      res.set('RateLimit-Limit', String(limit));
+      return next();
+    } catch (error) {
+      log('error', 'rate_limit_backend_failed', { request_id: req.id, error: error.message, taxonomy: 'dependency' });
+      if (process.env.NODE_ENV === 'production') return res.status(503).json({ error: 'Rate limiting service unavailable.' });
+      return next();
     }
-    const now = Date.now();
-    const key = `${req.ip || req.socket.remoteAddress || 'unknown'}:${req.baseUrl}${req.path}`;
-    const bucket = requestBuckets.get(key) || { startedAt: now, count: 0 };
-    if (now - bucket.startedAt >= windowMs) { bucket.startedAt = now; bucket.count = 0; }
-    bucket.count += 1; requestBuckets.set(key, bucket);
-    if (bucket.count > limit) {
-      res.set('Retry-After', String(Math.ceil((bucket.startedAt + windowMs - now) / 1000)));
-      return res.status(429).json({ error: 'Request rate limit exceeded.' });
-    }
-    res.set('RateLimit-Limit', String(limit));
-    res.set('RateLimit-Remaining', String(Math.max(0, limit - bucket.count)));
-    if (requestBuckets.size > 10_000) {
-      for (const [bucketKey, value] of requestBuckets) if (now - value.startedAt >= windowMs) requestBuckets.delete(bucketKey);
-    }
-    next();
   };
 }
 
@@ -233,8 +243,9 @@ async function deleteCancelCredential(incidentId) {
 }
 
 app.use(enforceRequestSafety);
-app.use('/api', requestLimit({ limit: Number(process.env.FULE_API_IP_LIMIT) || 180, windowMs: 60_000 }));
-app.use('/auth', requestLimit({ limit: 30, windowMs: 60_000 }));
+app.use('/api', requestLimit({ limit: Number(process.env.FULE_API_IP_LIMIT) || 180, windowMs: 60_000, global: true }));
+app.use('/auth', requestLimit({ limit: Number(process.env.FULE_AUTH_IP_LIMIT) || 120, windowMs: 60_000, global: true }));
+app.use('/api', requestLimit({ limit: Number(process.env.FULE_DEFAULT_ROUTE_LIMIT) || 600, windowMs: 60_000 }));
 
 function hashToken(value) {
   return createHash('sha256').update(value).digest();
@@ -256,11 +267,37 @@ function getGuardian(request) {
   return authenticateGuardian(getBearerToken(request));
 }
 
+function requireRoles(...roles) {
+  return (req, res, next) => {
+    const token = getBearerToken(req);
+    const guardian = token ? getGuardian(req) : null;
+    const account = token ? authenticateAccess(token) : null;
+    if (token && !guardian && !account) return res.status(401).json({ error: 'Authentication token is invalid or expired.' });
+    const role = guardian ? guardian.role || 'guardian' : account?.role;
+    if (!role) return res.status(token ? 401 : 403).json({ error: token ? 'Authentication token is invalid or expired.' : 'Verified guardian access required.' });
+    if (!roles.includes(role)) return res.status(403).json({ error: 'This role is not authorized for the requested resource.' });
+    req.identity = account || guardian;
+    req.guardianIdentity = guardian;
+    return next();
+  };
+}
+
 async function getTwitchUser(req) {
   const cookie = String(req.headers.cookie || '').split(';').map((item) => item.trim()).find((item) => item.startsWith(`${sessionCookie}=`));
   if (!cookie) return null;
   try { return await twitch.sessionAsync(decodeURIComponent(cookie.slice(sessionCookie.length + 1))); }
   catch { return null; }
+}
+
+async function getIncident(incidentId) { return volatileIncidents.get(incidentId) || getStoredIncident(incidentId); }
+
+async function withDeadline(promise, timeoutMs, label) {
+  let timer;
+  try {
+    return await Promise.race([promise, new Promise((_, reject) => {
+      timer = setTimeout(() => { const error = new Error(`${label} deadline exceeded`); error.code = 'DEPENDENCY_TIMEOUT'; reject(error); }, timeoutMs);
+    })]);
+  } finally { clearTimeout(timer); }
 }
 
 async function getStreamerIdentity(req, suppliedId = '') {
@@ -319,18 +356,35 @@ function clearIncidentTimers(incidentId) {
   if (redisEnabled) void cancelEscalationJobs(incidentId);
 }
 
-async function changeIncident(incidentId, patch, { event, actorId, details } = {}) {
+function changeIncident(incidentId, patch, options = {}) {
+  const operation = incidentTransitionQueue.catch(() => {}).then(() => changeIncidentAtomic(incidentId, patch, options));
+  incidentTransitionQueue = operation.then(() => undefined, () => undefined);
+  return operation;
+}
+
+async function changeIncidentAtomic(incidentId, patch, { event, actorId, details, expectedStatuses } = {}) {
   let current;
   let updated;
-  if (incidentRepository.db) {
+  if (volatileIncidents.has(incidentId)) {
+    current = volatileIncidents.get(incidentId);
+    if (expectedStatuses && !expectedStatuses.includes(current.status)) return null;
+    updated = createIncident({ ...current, ...patch });
+    if (current.streamer_id) updated.streamer_id = current.streamer_id;
+    if (!isIncident(updated)) throw new Error('Incident state failed schema validation');
+    volatileIncidents.set(incidentId, updated);
+    incidents.set(incidentId, updated);
+    await writeStateChange({ incident: updated, event, fromStatus: current.status, toStatus: updated.status, actorId, details });
+  } else if (incidentRepository.db && !databaseDegraded) {
     await incidentRepository.db.transaction(async (transaction) => {
       const row = await transaction('incidents').where({ incident_id: incidentId }).forUpdate().first('payload', 'streamer_id');
       if (!row) return;
       current = { ...createIncident(row.payload), ...(row.streamer_id ? { streamer_id: row.streamer_id } : {}) };
+      if (expectedStatuses && !expectedStatuses.includes(current.status)) return;
       updated = createIncident({ ...current, ...patch });
       if (current.streamer_id) updated.streamer_id = current.streamer_id;
       if (!isIncident(updated)) throw new Error('Incident state failed schema validation');
-      await transaction('incidents').where({ incident_id: incidentId }).update({ created_at: new Date(updated.created_at), status: updated.status, streamer_id: updated.streamer_id || '', payload: JSON.stringify(updated) });
+      const changed = await transaction('incidents').where({ incident_id: incidentId, status: current.status }).update({ created_at: new Date(updated.created_at), status: updated.status, streamer_id: updated.streamer_id || '', payload: JSON.stringify(updated) });
+      if (!changed) { updated = null; return; }
       await transaction('audit_events').insert({
         event: event || 'STATE_CHANGE', incident_id: incidentId, actor_id: actorId || null,
         payload: JSON.stringify({ at: new Date().toISOString(), event, incident_id: incidentId, from_status: current.status, to_status: updated.status, actor_id: actorId || null, details: details || null }),
@@ -340,6 +394,7 @@ async function changeIncident(incidentId, patch, { event, actorId, details } = {
   } else {
     current = await getIncident(incidentId);
     if (!current) return null;
+    if (expectedStatuses && !expectedStatuses.includes(current.status)) return null;
     updated = createIncident({ ...current, ...patch });
     if (current.streamer_id) updated.streamer_id = current.streamer_id;
     if (!isIncident(updated)) throw new Error('Incident state failed schema validation');
@@ -349,6 +404,21 @@ async function changeIncident(incidentId, patch, { event, actorId, details } = {
   if (!updated) return null;
   incidents.set(incidentId, updated);
   return updated;
+}
+
+async function acknowledgeIncident(incidentId, guardianId) {
+  const current = await getIncident(incidentId);
+  if (!current) return { ok: false, status: 404, error: 'Incident not found.' };
+  if (await safetyFeatureStore.guardianHasPendingOffer(current.incident_id, guardianId)) return { ok: false, status: 403, error: 'Accept the nearby response request before acknowledging.' };
+  const acknowledgedAt = new Date().toISOString();
+  const updated = await changeIncident(current.incident_id, {
+    status: 'ACKNOWLEDGED', acknowledged_by: guardianId, acknowledged_at: acknowledgedAt,
+    guardian_responses: [...(current.guardian_responses || []), { guardian_id: guardianId, at: acknowledgedAt, action: 'ACKNOWLEDGED' }]
+  }, { event: 'INCIDENT_ACKNOWLEDGED', actorId: guardianId, expectedStatuses: ['PENDING_DISPATCH', 'DISPATCHING', 'ESCALATED'] });
+  if (!updated) return { ok: false, status: 409, error: 'Incident already acknowledged or no longer active.' };
+  clearIncidentTimers(current.incident_id);
+  await emitIncidentUpdate(updated, 'incident_acknowledged');
+  return { ok: true, incident: updated };
 }
 
 async function emitIncidentUpdate(incident, eventName) {
@@ -528,13 +598,25 @@ async function createSosIncident(input) {
   const dispatchDelayMs = Number(process.env.FULE_DISPATCH_DELAY_MS) || Number(process.env.FULE_ESCALATION_DELAY_MS) || 60_000;
   const persistedIncident = { ...incident, streamer_id: payload.streamer_id };
   const cancelCredential = { streamer_id: payload.streamer_id, token_hash: hashToken(cancelToken).toString('hex') };
-  if (incidentRepository.db) {
-    await incidentRepository.db.transaction(async (transaction) => {
+  if (incidentRepository.db && !databaseDegraded) {
+    const persist = incidentRepository.db.transaction(async (transaction) => {
       await transaction('incidents').insert({ incident_id: incident.incident_id, created_at: new Date(incident.created_at), status: incident.status, streamer_id: payload.streamer_id, payload: JSON.stringify(persistedIncident) });
       await transaction('audit_events').insert({ event: 'SOS_CREATED', incident_id: incident.incident_id, actor_id: payload.streamer_id, payload: JSON.stringify({ at: new Date().toISOString(), event: 'SOS_CREATED', incident_id: incident.incident_id, from_status: null, to_status: incident.status, actor_id: payload.streamer_id }), created_at: new Date() });
       await transaction('streamer_incident_sessions').insert({ incident_id: incident.incident_id, streamer_id: payload.streamer_id, token_hash: cancelCredential.token_hash, expires_at: new Date(Date.now() + 7 * 86_400_000) });
     });
-    cancelCredentials.set(incident.incident_id, cancelCredential);
+    try {
+      await withDeadline(persist, Number(process.env.FULE_DB_SOS_DEADLINE_MS) || 1500, 'incident database write');
+      cancelCredentials.set(incident.incident_id, cancelCredential);
+    } catch (error) {
+      if (['DEPENDENCY_TIMEOUT', 'ECONNREFUSED', 'ECONNRESET', 'ETIMEDOUT', '57P01'].includes(error.code) || String(error.code || '').startsWith('08')) {
+        databaseDegraded = true;
+        volatileIncidents.set(incident.incident_id, persistedIncident);
+        cancelCredentials.set(incident.incident_id, cancelCredential);
+        incidents.set(incident.incident_id, persistedIncident);
+        writeAudit({ event: 'INCIDENT_VOLATILE_STORAGE_FALLBACK', incident_id: incident.incident_id, actor_id: 'system', details: error.message });
+        log('error', 'database_degraded_alert_volatile', { incident_id: incident.incident_id, taxonomy: 'dependency', error: error.message });
+      } else throw error;
+    }
   } else {
     await persistIncident(persistedIncident);
     await writeStateChange({ incident, event: 'SOS_CREATED', fromStatus: null, toStatus: incident.status, actorId: payload.streamer_id });
@@ -553,7 +635,20 @@ async function createSosIncident(input) {
   for (const responder of nearbyResponders) io.to(`guardian:${responder.guardian_id}`).emit('sos_activated', { ...toPublicIncident(incident), grace_period_seconds: 10 });
   if (!input.silent_public) io.to('public').emit('incident:public', toPublicIncident(incident));
   alertDeliveryLatency.observe(Number(process.hrtime.bigint() - broadcastStarted) / 1e9);
-  await scheduleDispatch(incident, { contactsDelayMs, dispatchDelayMs });
+  try { await scheduleDispatch(incident, { contactsDelayMs, dispatchDelayMs }); }
+  catch (error) {
+    log('error', 'durable_escalation_queue_unavailable_using_local_timer', { incident_id: incident.incident_id, taxonomy: 'dependency', error: error.message });
+    databaseDegraded = databaseDegraded || Boolean(incidentRepository.db);
+    const scheduled = createEscalationLadder({
+      incident, contactsDelayMs, dispatchDelayMs,
+      isAcknowledged: () => incidents.get(incident.incident_id)?.status === 'ACKNOWLEDGED',
+      isCancelled: () => ['CANCELLED','FALSE_ALARM','RESOLVED'].includes(incidents.get(incident.incident_id)?.status),
+      isDispatchSent: () => ['SENT','ACKNOWLEDGED'].includes(incidents.get(incident.incident_id)?.dispatch_record?.status),
+      onContacts: () => contactTrustedPeople(incident.incident_id),
+      onDispatch: () => sendToDispatch(incident.incident_id, incident.threat_level === 'CRITICAL' ? 'CRITICAL_THREAT' : 'T_PLUS_60')
+    });
+    timers.set(incident.incident_id, scheduled);
+  }
   void synthesizeIncident(synthesisInput).then(async (aiResult) => {
     if (!incidents.has(incident.incident_id)) return;
     const updated = await changeIncident(incident.incident_id, aiResult, { event: 'AI_SYNTHESIS_UPDATED', actorId: 'system' });
@@ -667,10 +762,10 @@ async function scheduleDispatch(incident, { contactsDelayMs = 30_000, dispatchDe
   timers.set(incidentId, scheduled);
 }
 
-function consumeInviteAttempt(key) {
+function consumeInviteAttempt(key, limit = 8) {
   const now = Date.now();
   const active = (inviteAttempts.get(key) || []).filter((time) => time > now - 60_000);
-  if (active.length >= 8) {
+  if (active.length >= limit) {
     inviteAttempts.set(key, active);
     return false;
   }
@@ -730,8 +825,24 @@ io.use(async (socket, next) => {
   next();
 });
 
-app.get('/api/health', (_req, res) => {
-  res.json({ status: 'ok' });
+app.get('/api/health', async (_req, res) => {
+  let database = incidentRepository.db ? 'available' : 'demo_file';
+  let redisStatus = redisEnabled ? 'available' : 'disabled';
+  if (incidentRepository.db) {
+    try { await Promise.race([incidentRepository.db.raw('select 1'), new Promise((_, reject) => setTimeout(() => reject(new Error('database health check timed out')), 500))]); }
+    catch { database = 'degraded'; }
+  }
+  if (databaseDegraded) database = 'degraded';
+  if (redisEnabled) {
+    try { if (await redis.ping() !== 'PONG') redisStatus = 'degraded'; }
+    catch { redisStatus = 'degraded'; }
+  }
+  const snapshot = buildDegradedSnapshot({
+    database, redis: redisStatus, ai: incidentAiHealth(),
+    twitch: !twitch.configured() ? 'unconfigured' : twitch.requestCircuit.snapshot().state === 'open' ? 'circuit_open' : 'available',
+    dispatch: dispatchProvider.name === 'SimulatedDispatch' ? 'simulated' : dispatchProvider.name === 'UnconfiguredDispatch' ? 'unconfigured' : 'available'
+  });
+  return res.json(snapshot);
 });
 
 app.get('/api/ready', async (_req, res) => {
@@ -808,7 +919,7 @@ app.get('/auth/twitch/callback', async (req, res) => {
   } catch (error) { log('error', 'twitch_login_failed', { request_id: req.id, error: error.message }); res.status(502).send('Twitch login failed.'); }
 });
 
-app.get('/api/twitch/session', async (req, res) => {
+app.get('/api/twitch/session', requestLimit({ limit: Number(process.env.FULE_TWITCH_SESSION_LIMIT) || 60, windowMs: 60_000 }), async (req, res) => {
   const user = await getTwitchUser(req);
   const connection = user && twitch.connections.get(user.id);
   return res.json({ user, eventsub_status: connection?.ready ? 'connected' : user ? 'connecting' : 'disconnected' });
@@ -939,10 +1050,10 @@ app.post('/api/safe-walks/:walkId/cancel', async (req, res) => {
   return res.json({ ok: true, status: 'CANCELLED' });
 });
 
-app.post('/api/guardians/verify', requestLimit({ limit: 8, windowMs: 60_000 }), (req, res) => {
+app.post('/api/guardians/verify', requestLimit({ limit: Number(process.env.FULE_GUARDIAN_VERIFY_LIMIT) || 8, windowMs: 60_000 }), (req, res) => {
   if (!demoMode) return res.status(410).json({ error: 'Invite verification is disabled. Register, request guardian status, and wait for administrator approval.' });
   const key = req.ip || req.socket.remoteAddress || 'unknown';
-  if (!consumeInviteAttempt(key)) { res.set('Retry-After', '60'); return res.status(429).json({ error: 'Too many invite attempts. Try again in one minute.' }); }
+  if (!consumeInviteAttempt(key, Number(process.env.FULE_GUARDIAN_VERIFY_LIMIT) || 8)) { res.set('Retry-After', '60'); return res.status(429).json({ error: 'Too many invite attempts. Try again in one minute.' }); }
   const verified = verifyGuardianInvite(req.body?.invite_code, { allowDemo: demoMode });
   if (!verified) return res.status(401).json({ error: 'Invalid or inactive guardian invite.' });
   return res.json(verified);
@@ -987,15 +1098,20 @@ app.post('/api/incidents/:incidentId/nearby-accept', async (req, res) => {
   return res.json({ accepted: true, accepted_count: accepted.count, incident });
 });
 
-app.get('/api/incidents', requestLimit({ limit: 60, windowMs: 60_000 }), async (req, res) => {
-  const guardian = getGuardian(req);
-  if (!guardian) return res.status(403).json({ error: 'Verified guardian access required.' });
+app.get('/api/incidents', requestLimit({ limit: 60, windowMs: 60_000 }), requireRoles('guardian', 'admin'), async (req, res) => {
+  const guardian = req.guardianIdentity;
   const limit = req.query?.limit === undefined ? 100 : Number(req.query.limit);
   const offset = req.query?.offset === undefined ? 0 : Number(req.query.offset);
   if (!Number.isInteger(limit) || limit < 1 || limit > 100 || !Number.isInteger(offset) || offset < 0 || offset > 1_000_000) return res.status(400).json({ error: 'limit must be 1–100 and offset a non-negative integer.' });
   const page = await listIncidentPage({ limit, offset });
   const visible = await Promise.all(page.map(async ({ streamer_id, ...incident }) => await safetyFeatureStore.guardianHasPendingOffer(incident.incident_id, guardian.guardian_id) ? toPublicIncident(incident) : incident));
   return res.json({ incidents: visible, guardian_id: guardian.guardian_id, limit, offset });
+});
+
+app.post('/api/incidents/:incidentId/acknowledge', requestLimit({ limit: 20, windowMs: 60_000 }), requireRoles('guardian', 'admin'), async (req, res) => {
+  const guardian = req.guardianIdentity;
+  const result = await acknowledgeIncident(String(req.params.incidentId), guardian.guardian_id);
+  return result.ok ? res.json({ incident: result.incident }) : res.status(result.status).json({ error: result.error });
 });
 
 app.get('/api/incidents/:incidentId/case-file', async (req, res) => {
@@ -1095,18 +1211,47 @@ app.post('/api/sos', requestLimit({ limit: Number(process.env.FULE_SOS_IP_LIMIT)
   const source = req.body?.source || 'button';
   if (source !== 'button' && !(demoMode && isLoopbackRequest(req))) return res.status(400).json({ error: 'Chat and redeem incidents must come from verified Twitch EventSub events.' });
   const idempotencyKey = String(req.get('Idempotency-Key') || '').trim();
-  if (idempotencyKey && !/^[\w:.-]{8,180}$/.test(idempotencyKey)) return res.status(400).json({ error: 'Idempotency-Key must contain 8–180 safe characters.' });
+  if (!idempotencyKey) return res.status(400).json({ error: 'Idempotency-Key header is required for SOS requests.' });
+  if (!/^[\w:.-]{8,180}$/.test(idempotencyKey)) return res.status(400).json({ error: 'Idempotency-Key must contain 8–180 safe characters.' });
   try {
-    const scopedKey = idempotencyKey ? `${req.body?.streamer_id}:${idempotencyKey}`.slice(0, 200) : '';
-    if (scopedKey && incidentRepository.db) {
-      const existing = await incidentRepository.db('idempotency_keys').where({ key: scopedKey }).first();
-      if (existing) return res.status(200).json(existing.response);
+    const scopedKey = `${req.body?.streamer_id}:${createHash('sha256').update(idempotencyKey).digest('hex')}`;
+    if (incidentRepository.db) {
+      const windowStart = new Date(Date.now() - 24 * 60 * 60_000);
+      const existing = await incidentRepository.db('idempotency_keys').where({ key: scopedKey }).where('created_at', '>', windowStart).first();
+      if (existing?.response) return res.status(200).json(existing.response);
+      if (existing) {
+        for (let attempt = 0; attempt < 60; attempt += 1) {
+          await new Promise((resolve) => setTimeout(resolve, 100));
+          const pending = await incidentRepository.db('idempotency_keys').where({ key: scopedKey }).first();
+          if (pending?.response) return res.status(200).json(pending.response);
+        }
+        res.set('Retry-After', '1');
+        return res.status(503).json({ error: 'A request with this idempotency key is still being processed. Retry with the same key.' });
+      }
+      await incidentRepository.db('idempotency_keys').where({ key: scopedKey }).del();
+      const inserted = await incidentRepository.db('idempotency_keys').insert({ key: scopedKey, streamer_id: req.body?.streamer_id, incident_id: `pending:${randomBytes(8).toString('hex')}`, response: null, created_at: new Date() }).onConflict('key').ignore().returning('key');
+      if (!inserted.length) {
+        res.set('Retry-After', '1');
+        return res.status(503).json({ error: 'A request with this idempotency key is already being processed. Retry with the same key.' });
+      }
     }
-    if (scopedKey && memoryIdempotency.has(scopedKey)) return res.status(200).json(memoryIdempotency.get(scopedKey));
-    const result = await createSosIncident(req.body);
+    if (scopedKey && memoryIdempotency.has(scopedKey)) {
+      const cached = memoryIdempotency.get(scopedKey);
+      if (cached.expires_at > Date.now()) return res.status(200).json(cached.response);
+      memoryIdempotency.delete(scopedKey);
+    }
+    if (scopedKey && creatingIdempotency.has(scopedKey)) {
+      const replay = await creatingIdempotency.get(scopedKey);
+      return res.status(200).json(replay);
+    }
+    const work = createSosIncident(req.body);
+    if (scopedKey) creatingIdempotency.set(scopedKey, work.then((result) => result.body));
+    const result = await work;
     if (result.status === 201 && scopedKey) {
-      memoryIdempotency.set(scopedKey, result.body);
-      if (incidentRepository.db) await incidentRepository.db('idempotency_keys').insert({ key: scopedKey, streamer_id: req.body.streamer_id, incident_id: result.body.incident.incident_id, response: JSON.stringify(result.body) }).onConflict('key').ignore();
+      memoryIdempotency.set(scopedKey, { response: result.body, expires_at: Date.now() + 24 * 60 * 60_000 });
+      if (incidentRepository.db) await incidentRepository.db('idempotency_keys').where({ key: scopedKey }).update({ incident_id: result.body.incident.incident_id, response: JSON.stringify(result.body) });
+    } else if (scopedKey && incidentRepository.db) {
+      await incidentRepository.db('idempotency_keys').where({ key: scopedKey }).del();
     }
     await flushIncidentWrites();
     return res.status(result.status).json(result.body);
@@ -1115,7 +1260,7 @@ app.post('/api/sos', requestLimit({ limit: Number(process.env.FULE_SOS_IP_LIMIT)
     if (error.code === '23505') return res.status(409).json({ error: 'An active incident already exists for this streamer.' });
     Sentry.captureException(error); log('error', 'sos_create_failed', { request_id: req.id, error: error.message });
     return res.status(500).json({ error: 'Could not create incident. Please retry.' });
-  }
+  } finally { if (req.get('Idempotency-Key')) creatingIdempotency.delete(`${req.body?.streamer_id}:${createHash('sha256').update(String(req.get('Idempotency-Key'))).digest('hex')}`); }
 });
 
 io.on('connection', (socket) => {
@@ -1169,25 +1314,10 @@ io.on('connection', (socket) => {
   socket.on('acknowledge_incident', async (incidentId) => {
     if (socket.data.role !== 'guardian' || !socket.data.guardianId) return;
     if (typeof incidentId !== 'string' || incidentId.length > 128) return;
-    const current = await getIncident(String(incidentId));
-    if (!current || !['PENDING_DISPATCH', 'DISPATCHING', 'ESCALATED'].includes(current.status)) return;
-    if (await safetyFeatureStore.guardianHasPendingOffer(current.incident_id, socket.data.guardianId)) {
-      socket.emit('guardian_accept_required', { incident_id: current.incident_id });
-      return;
-    }
-    clearIncidentTimers(current.incident_id);
     try {
-      const acknowledged = await changeIncident(current.incident_id, {
-        status: 'ACKNOWLEDGED', acknowledged_by: socket.data.guardianId,
-        acknowledged_at: new Date().toISOString(),
-        guardian_responses: [...(current.guardian_responses || []), { guardian_id: socket.data.guardianId, at: new Date().toISOString(), action: 'ACKNOWLEDGED' }]
-      }, { event: 'INCIDENT_ACKNOWLEDGED', actorId: socket.data.guardianId });
-      emitIncidentUpdate(acknowledged, 'incident_acknowledged');
-      // Keep the streamer capability while dispatch is only queued so the
-      // originator can still cancel before a provider reports SENT.
-    } catch (error) {
-      log('error', 'incident_acknowledgement_failed', { incident_id: current.incident_id, error: error.message });
-    }
+      const result = await acknowledgeIncident(String(incidentId), socket.data.guardianId);
+      if (!result.ok) socket.emit(result.status === 403 ? 'guardian_accept_required' : 'acknowledgement_rejected', { incident_id: incidentId, reason: result.error });
+    } catch (error) { log('error', 'incident_acknowledgement_failed', { incident_id: incidentId, error: error.message }); }
   });
 
   const handleStreamerCancellation = (eventName, status) => async (payload = {}) => {
@@ -1257,7 +1387,7 @@ app.use((error, _req, res, _next) => {
   if (error.type === 'entity.too.large') return res.status(413).json({ error: 'Request body is too large.' });
   if (error instanceof SyntaxError) return res.status(400).json({ error: 'Malformed JSON request.' });
   Sentry.captureException(error);
-  log('error', 'request_middleware_error', { request_id: _req.id, error: error.message });
+  log('error', 'request_middleware_error', { request_id: _req.id, error: error.message, taxonomy: error.type ? 'client' : 'internal' });
   return res.status(500).json({ error: 'Request could not be processed.' });
 });
 

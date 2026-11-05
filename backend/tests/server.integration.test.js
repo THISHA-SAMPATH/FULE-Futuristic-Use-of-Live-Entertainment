@@ -1,12 +1,14 @@
 import test, { before, after } from 'node:test';
 import assert from 'node:assert/strict';
+import { createHash, randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { createServer } from 'node:net';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import jwt from 'jsonwebtoken';
 
 const require = createRequire(fileURLToPath(new URL('../../frontend/package.json', import.meta.url)));
 const { io } = require('socket.io-client');
@@ -17,6 +19,7 @@ let child;
 let dataDir;
 const sockets = new Set();
 const guardianInvite = 'integration-guardian-invite-2026';
+const secondGuardianInvite = 'integration-second-guardian-invite-2026';
 let cachedGuardian;
 
 async function freePort() {
@@ -77,9 +80,15 @@ async function verifyGuardian() {
   return cachedGuardian;
 }
 
+async function verifySecondGuardian() {
+  const response = await fetch(`${origin}/api/guardians/verify`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ invite_code: secondGuardianInvite }) });
+  assert.equal(response.status, 200);
+  return response.json();
+}
+
 async function createSos(streamerId, module_type = 'FULE_PROTECT', source = 'button', transcript = 'I am safe but would like someone to check in.') {
   return fetch(`${origin}/api/sos`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    method: 'POST', headers: { 'Content-Type': 'application/json', 'Idempotency-Key': `integration:${randomUUID()}` },
     body: JSON.stringify({
       streamer_id: streamerId,
       location: { lat: 12.9716, lng: 77.5946 },
@@ -94,6 +103,7 @@ before(async () => {
   port = await freePort();
   origin = `http://127.0.0.1:${port}`;
   dataDir = await mkdtemp(join(tmpdir(), 'fule-integration-'));
+  await writeFile(join(dataDir, 'guardians.json'), `${JSON.stringify([guardianInvite, secondGuardianInvite].map((invite, index) => ({ guardian_id: `integration-guardian-${index + 1}`, invite_code_hash: createHash('sha256').update(invite).digest('hex'), active: true, demo: true }))) }\n`);
   child = spawn(process.execPath, ['server.js'], {
     cwd: backendDir,
     env: {
@@ -113,11 +123,30 @@ before(async () => {
       FULE_DISPATCH_DELAY_MS: '1000',
       FULE_ESCALATION_DELAY_MS: '1200',
       FULE_SOS_IP_LIMIT: '100',
+      FULE_API_IP_LIMIT: '1000',
+      FULE_DEFAULT_ROUTE_LIMIT: '600',
+      FULE_TWITCH_SESSION_LIMIT: '1',
+      FULE_GUARDIAN_VERIFY_LIMIT: '100',
       OPENAI_API_KEY: ''
     },
     stdio: 'ignore'
   });
   await waitForServer();
+});
+
+test('request IDs are echoed and route latency histograms are exported', async () => {
+  const response = await fetch(`${origin}/api/health`, { headers: { 'X-Request-Id': 'integration-request-id-001' } });
+  assert.equal(response.headers.get('x-request-id'), 'integration-request-id-001');
+  assert.equal(response.status, 200);
+  const allowed = await fetch(`${origin}/api/twitch/session`);
+  assert.equal(allowed.status, 200);
+  const limited = await fetch(`${origin}/api/twitch/session`);
+  assert.equal(limited.status, 429);
+  assert.ok(Number(limited.headers.get('retry-after')) > 0);
+  const metrics = await fetch(`${origin}/metrics`);
+  const body = await metrics.text();
+  assert.match(body, /fule_http_request_duration_seconds_bucket/);
+  assert.match(body, /fule_http_requests_total/);
 });
 
 after(async () => {
@@ -138,6 +167,22 @@ test('SOS create route accepts every supported module', async () => {
   }
 });
 
+test('health reports demo degradation while SOS alert delivery still reaches connected guardians', async () => {
+  const health = await (await fetch(`${origin}/api/health`)).json();
+  assert.equal(health.alerts_available, true);
+  assert.ok(health.degraded_modes.includes('database_demo_file_storage'));
+  assert.ok(health.degraded_modes.includes('ai_deterministic_fallback'));
+  const guardian = await verifyGuardian();
+  const guardianSocket = socket({ guardianToken: guardian.access_token });
+  await connected(guardianSocket);
+  const alert = once(guardianSocket, 'sos_activated');
+  const created = await createSos(`degraded-${randomUUID()}`);
+  assert.equal(created.status, 201);
+  const { incident } = await created.json();
+  assert.equal((await alert).incident_id, incident.incident_id);
+  guardianSocket.disconnect();
+});
+
 test('SOS idempotency key returns the original incident on retry', async () => {
   const payload = {
     streamer_id: 'idempotency-streamer',
@@ -154,6 +199,43 @@ test('SOS idempotency key returns the original incident on retry', async () => {
   assert.equal(retry.status, 200);
   assert.equal(retryBody.incident.incident_id, firstBody.incident.incident_id);
   assert.equal(retryBody.streamer_cancel_token, firstBody.streamer_cancel_token);
+});
+
+test('SOS requires an idempotency key and replays the original response on client retry', async () => {
+  const payload = { streamer_id: 'required-idempotency', location: { lat: 12.9716, lng: 77.5946 }, module_type: 'FULE_PROTECT', source: 'button', audio_transcript_snippet: '' };
+  const missing = await fetch(`${origin}/api/sos`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+  assert.equal(missing.status, 400);
+  assert.match((await missing.json()).error, /Idempotency-Key/);
+  const key = `retry:${randomUUID()}`;
+  const request = () => fetch(`${origin}/api/sos`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Idempotency-Key': key }, body: JSON.stringify(payload) });
+  const [first, second] = await Promise.all([request(), request()]);
+  const firstBody = await first.json(); const secondBody = await second.json();
+  assert.equal(first.status, 201);
+  assert.ok([200, 201].includes(second.status));
+  assert.equal(firstBody.incident.incident_id, secondBody.incident.incident_id);
+  assert.equal(firstBody.streamer_cancel_token, secondBody.streamer_cancel_token);
+});
+
+test('parallel guardian acknowledgement requests have exactly one winner', async () => {
+  const firstGuardian = await verifyGuardian();
+  const secondGuardian = await verifySecondGuardian();
+  assert.notEqual(firstGuardian.guardian_id, secondGuardian.guardian_id);
+  const created = await createSos(`parallel-ack-${randomUUID()}`);
+  const { incident } = await created.json();
+  const acknowledge = (token) => fetch(`${origin}/api/incidents/${incident.incident_id}/acknowledge`, { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: '{}' });
+  const [left, right] = await Promise.all([acknowledge(firstGuardian.access_token), acknowledge(secondGuardian.access_token)]);
+  const results = await Promise.all([left.json(), right.json()]);
+  assert.deepEqual([left.status, right.status].sort(), [200, 409]);
+  const winner = left.status === 200 ? firstGuardian : secondGuardian;
+  assert.equal(results[left.status === 200 ? 0 : 1].incident.acknowledged_by, winner.guardian_id);
+  assert.match(results[left.status === 409 ? 0 : 1].error, /already acknowledged/i);
+});
+
+test('central guardian authorization rejects expired access tokens with 401', async () => {
+  const expired = jwt.sign({ sub: 'expired-guardian', role: 'guardian' }, 'development-only-secret-change-this-before-production', { expiresIn: -1, issuer: 'fule' });
+  const response = await fetch(`${origin}/api/incidents`, { headers: { Authorization: `Bearer ${expired}` } });
+  assert.equal(response.status, 401);
+  assert.match((await response.json()).error, /expired/i);
 });
 
 test('nearby on-duty guardian sees approximate area until acceptance reveals exact incident location', async () => {
@@ -264,7 +346,7 @@ test('demo API accepts Vite fallback localhost origins with CORS credentials', a
   const fallbackOrigin = 'http://127.0.0.1:5174';
   const response = await fetch(`${origin}/api/sos`, {
     method: 'POST',
-    headers: { Origin: fallbackOrigin, 'Content-Type': 'application/json' },
+    headers: { Origin: fallbackOrigin, 'Content-Type': 'application/json', 'Idempotency-Key': `vite-fallback:${randomUUID()}` },
     body: JSON.stringify({
       streamer_id: 'vite-fallback-origin',
       location: { lat: 12.9716, lng: 77.5946 },

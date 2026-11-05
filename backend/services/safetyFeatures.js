@@ -1,4 +1,5 @@
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
+import { rankGuardians } from './guardianRanking.js';
 
 const ZERO_HASH = '0'.repeat(64);
 const keyFrom = (value) => createHash('sha256').update(String(value)).digest('hex');
@@ -41,9 +42,10 @@ export function matchNearbyGuardians(incidentLocation, guardianLocations, { radi
   if (!Number.isFinite(incidentLocation?.lat) || !Number.isFinite(incidentLocation?.lng)) return [];
   return guardianLocations
     .filter((guardian) => guardian?.verified === true && guardian?.on_duty === true && Number.isFinite(guardian.lat) && Number.isFinite(guardian.lng))
-    .map((guardian) => ({ guardian_id: String(guardian.guardian_id), distance_m: Math.round(distanceMeters(incidentLocation, guardian)), approximate_area: approximateArea(guardian) }))
+    .map((guardian) => ({ guardian_id: String(guardian.guardian_id), distance_m: Math.round(distanceMeters(incidentLocation, guardian)), approximate_area: approximateArea(guardian), response_time_seconds: guardian.response_time_seconds, trust_rating: guardian.trust_rating }))
     .filter((guardian) => guardian.distance_m <= radiusMeters)
-    .sort((a, b) => a.distance_m - b.distance_m)
+    .map((guardian) => ({ ...guardian, ...rankGuardians([guardian], { radiusMeters })[0] }))
+    .sort((a, b) => b.ranking_score - a.ranking_score || a.distance_m - b.distance_m)
     .slice(0, limit);
 }
 

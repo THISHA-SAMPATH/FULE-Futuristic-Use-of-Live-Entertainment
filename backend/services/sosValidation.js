@@ -2,6 +2,12 @@ import { INCIDENT_MODULES, INCIDENT_SOURCES } from '../../shared/incident.mjs';
 
 export function validateSosPayload(body) {
   if (!body || typeof body !== 'object' || Array.isArray(body)) return { ok: false, error: 'A JSON object is required.' };
+  const allowedKeys = new Set(['streamer_id', 'location', 'module_type', 'audio_transcript_snippet', 'source', 'silent_public', 'event_id']);
+  const unknown = Object.keys(body).find((key) => !allowedKeys.has(key));
+  if (unknown) return { ok: false, error: `Unsupported SOS field: ${unknown}.` };
+  if (!body.location || typeof body.location !== 'object' || Array.isArray(body.location)) return { ok: false, error: 'location must be an object.' };
+  const unknownLocationKey = Object.keys(body.location).find((key) => !['lat', 'lng', 'address'].includes(key));
+  if (unknownLocationKey) return { ok: false, error: `Unsupported location field: ${unknownLocationKey}.` };
   const streamer_id = typeof body.streamer_id === 'string' ? body.streamer_id.trim() : '';
   if (!streamer_id || streamer_id.length > 100 || !/^[\w-]+$/.test(streamer_id)) {
     return { ok: false, error: 'streamer_id is required and must contain only letters, numbers, underscores, or hyphens.' };
@@ -10,6 +16,8 @@ export function validateSosPayload(body) {
   const lat = body.location?.lat == null ? null : Number(body.location.lat);
   const lng = body.location?.lng == null ? null : Number(body.location.lng);
   if (!unavailable && (!Number.isFinite(lat) || lat < -90 || lat > 90 || !Number.isFinite(lng) || lng < -180 || lng > 180)) return { ok: false, error: 'location.lat and location.lng must be valid coordinates.' };
+  if (!unavailable && (typeof body.location.lat !== 'number' || typeof body.location.lng !== 'number')) return { ok: false, error: 'location coordinates must be JSON numbers.' };
+  if (body.location.address != null && (typeof body.location.address !== 'string' || body.location.address.length > 160)) return { ok: false, error: 'location.address must be text up to 160 characters.' };
   const module_type = String(body.module_type || 'FULE_PROTECT').toUpperCase();
   if (!INCIDENT_MODULES.includes(module_type)) return { ok: false, error: `module_type must be one of: ${INCIDENT_MODULES.join(', ')}.` };
   const source = body.source || 'button';
@@ -17,14 +25,19 @@ export function validateSosPayload(body) {
   if (body.audio_transcript_snippet != null && typeof body.audio_transcript_snippet !== 'string') {
     return { ok: false, error: 'audio_transcript_snippet must be a string.' };
   }
+  if (typeof body.audio_transcript_snippet === 'string' && body.audio_transcript_snippet.length > 4000) return { ok: false, error: 'audio_transcript_snippet cannot exceed 4000 characters.' };
+  if (body.silent_public != null && typeof body.silent_public !== 'boolean') return { ok: false, error: 'silent_public must be a boolean.' };
+  if (body.event_id != null && (typeof body.event_id !== 'string' || body.event_id.length > 180 || !/^[\w:.-]+$/.test(body.event_id))) return { ok: false, error: 'event_id must be a valid Twitch event identifier.' };
   return {
     ok: true,
     value: {
       streamer_id,
       location: { lat, lng, address: unavailable ? 'Location unavailable' : 'Simulated location · address withheld publicly' },
       module_type,
-      audio_transcript_snippet: String(body.audio_transcript_snippet || '').slice(-4000),
-      source
+      audio_transcript_snippet: String(body.audio_transcript_snippet || ''),
+      source,
+      ...(body.silent_public === true ? { silent_public: true } : {}),
+      ...(body.event_id ? { event_id: body.event_id } : {})
     }
   };
 }

@@ -1,4 +1,4 @@
-import { createCipheriv, createDecipheriv, randomBytes, randomUUID } from 'node:crypto';
+import { createCipheriv, createDecipheriv, createHash, randomBytes, randomUUID } from 'node:crypto';
 import { incidentRepository } from './incidentStore.js';
 import { redis } from './runtimeInfrastructure.js';
 
@@ -65,6 +65,14 @@ export const twitchAccountStore = {
     await redis.eval("if redis.call('GET',KEYS[1])==ARGV[1] then return redis.call('DEL',KEYS[1]) else return 0 end", 1, `${leasePrefix}${id}`, nodeId);
   },
   async releaseAllEventSub(identifiers) { await Promise.allSettled(identifiers.map((id) => this.releaseEventSub(id))); },
+  async claimEventSubMessage(streamerId, messageId, ttlMs = 10 * 60_000) {
+    const key = createHash('sha256').update(`${streamerId}:${messageId}`).digest('hex');
+    if (redis) return (await redis.set(`fule:twitch:event-id:${key}`, '1', 'PX', ttlMs, 'NX')) === 'OK';
+    if (!db) return null;
+    await db('twitch_event_dedup').where('expires_at', '<=', new Date()).del();
+    const inserted = await db('twitch_event_dedup').insert({ event_id: key, expires_at: new Date(Date.now() + ttlMs) }).onConflict('event_id').ignore().returning('event_id');
+    return inserted.length > 0;
+  },
   async saveOAuthState(state) {
     if (!redis) return false;
     return (await redis.set(`fule:twitch:oauth-state:${state}`, '1', 'EX', 600, 'NX')) === 'OK';

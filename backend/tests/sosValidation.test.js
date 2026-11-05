@@ -28,6 +28,23 @@ test('SOS validation rejects unknown module, source, and non-text transcript', (
   assert.equal(validateSosPayload({ ...validPayload, audio_transcript_snippet: {} }).ok, false);
 });
 
+test('SOS validation enforces strict field and size limits', () => {
+  assert.equal(validateSosPayload({ ...validPayload, extra: true }).ok, false);
+  assert.equal(validateSosPayload({ ...validPayload, audio_transcript_snippet: 'x'.repeat(4001) }).ok, false);
+  assert.equal(validateSosPayload({ ...validPayload, location: { lat: '12.9', lng: 77.5 } }).ok, false);
+  assert.equal(validateSosPayload({ ...validPayload, location: { lat: 0, lng: 0, precise_note: 'secret' } }).ok, false);
+});
+
+test('SOS schema fuzzing malformed JSON-shaped inputs never throws', () => {
+  let seed = 0xF01E;
+  const random = () => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 0x1_0000_0000; };
+  const values = [null, true, false, 0, 1, -1, '', 'x'.repeat(5000), [], {}, { lat: null }, { lat: {}, lng: [] }, { lat: 91, lng: 181 }];
+  for (let index = 0; index < 1_000; index += 1) {
+    const candidate = { streamer_id: random() < 0.5 ? `fuzz-${index}` : values[Math.floor(random() * values.length)], location: values[Math.floor(random() * values.length)], module_type: values[Math.floor(random() * values.length)], source: values[Math.floor(random() * values.length)], audio_transcript_snippet: values[Math.floor(random() * values.length)] };
+    assert.doesNotThrow(() => validateSosPayload(candidate));
+  }
+});
+
 test('rate limit allows three incidents in five minutes per streamer', () => {
   const limit = createStreamerRateLimiter({ limit: 3, windowMs: 300_000 });
   assert.equal(limit('streamer-a', 10).allowed, true);

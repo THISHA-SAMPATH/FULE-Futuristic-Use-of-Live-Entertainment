@@ -1,4 +1,5 @@
 import { createHmac, randomUUID } from 'node:crypto';
+import { CircuitBreaker, withRetriesAndCircuit } from './resilience.js';
 
 export function createEmergencyReport(incident, { streamerContact = null, guardianResponses = [] } = {}) {
   return {
@@ -34,27 +35,19 @@ export class WebhookDispatch {
   constructor({ url, secret, fetchImpl = globalThis.fetch, retries = 2, retryDelayMs = 150, timeoutMs = 8_000 } = {}) {
     if (!url || !secret) throw new Error('DISPATCH_WEBHOOK_URL and DISPATCH_WEBHOOK_SECRET are required for webhook dispatch.');
     this.url = url; this.secret = secret; this.fetch = fetchImpl; this.retries = retries; this.retryDelayMs = retryDelayMs; this.timeoutMs = timeoutMs; this.name = 'WebhookDispatch';
+    this.circuit = new CircuitBreaker({ name: 'dispatch webhook', failureThreshold: 3, openMs: 10_000 });
   }
   signature(body) { return `sha256=${createHmac('sha256', this.secret).update(body).digest('hex')}`; }
   async post(payload, type) {
     const body = JSON.stringify({ type, ...payload });
     const signature = this.signature(body);
-    let lastError;
-    for (let attempt = 0; attempt <= this.retries; attempt += 1) {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), this.timeoutMs);
-      try {
-        const response = await this.fetch(this.url, {
-          method: 'POST', headers: { 'content-type': 'application/json', 'x-fule-signature': signature, 'x-fule-event': type },
-          body, signal: controller.signal
-        });
-        if (response.ok) return { response, body };
-        lastError = new Error(`Dispatch webhook returned HTTP ${response.status}.`);
-      } catch (error) { lastError = error; }
-      finally { clearTimeout(timer); }
-      if (attempt < this.retries) await new Promise((resolve) => setTimeout(resolve, this.retryDelayMs * (attempt + 1)));
-    }
-    throw lastError || new Error('Dispatch webhook failed.');
+    return withRetriesAndCircuit(async ({ signal }) => {
+      const response = await this.fetch(this.url, {
+        method: 'POST', headers: { 'content-type': 'application/json', 'x-fule-signature': signature, 'x-fule-event': type }, body, signal
+      });
+      if (!response.ok) { const error = new Error(`Dispatch webhook returned HTTP ${response.status}.`); error.retryable = response.status >= 500 || response.status === 429; throw error; }
+      return { response, body };
+    }, { name: 'dispatch webhook', timeoutMs: this.timeoutMs, deadlineMs: this.timeoutMs * (this.retries + 1) + this.retryDelayMs * (this.retries + 1), maxAttempts: this.retries + 1, baseDelayMs: this.retryDelayMs, maxDelayMs: this.retryDelayMs * 8, circuitBreaker: this.circuit });
   }
   async dispatch(report) {
     const { response } = await this.post({ report }, 'dispatch.report');

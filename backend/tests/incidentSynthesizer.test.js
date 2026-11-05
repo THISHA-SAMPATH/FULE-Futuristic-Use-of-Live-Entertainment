@@ -30,6 +30,11 @@ test('OpenAI errors fall back deterministically with the same shape', async () =
   assert.deepEqual(result, deterministicFallback(input));
 });
 
+test('malformed model JSON safely falls back to deterministic output', async () => {
+  const client = { responses: { create: async () => ({ output_text: '{invalid json' }) } };
+  assert.deepEqual(await synthesizeIncident(input, { demoMode: false, client, circuitBreaker: undefined }), deterministicFallback(input));
+});
+
 test('button and redeem SOS without transcript default to CRITICAL', () => {
   for (const source of ['button', 'redeem']) {
     assert.equal(deterministicFallback({ ...input, audio_transcript_snippet: '', source }).threat_level, 'CRITICAL');
@@ -44,7 +49,9 @@ test('synthesis rounds location and respects the total deadline', async () => {
     return new Promise(() => {});
   } } };
   const started = Date.now();
-  const result = await synthesizeIncident({ ...input, location: { lat: 12.9716, lng: 77.5946 } }, { demoMode: false, client, deadlineMs: 40 });
+  const result = await synthesizeIncident({ ...input, location: { lat: 12.9716, lng: 77.5946, address: 'Exact private address 123' } }, { demoMode: false, client, deadlineMs: 40 });
+  assert.deepEqual(sentInput.location, { lat: 12.97, lng: 77.59 });
+  assert.equal(JSON.stringify(sentInput).includes('Exact private address'), false);
   assert.ok(Date.now() - started < 160);
   assert.deepEqual(sentInput.location, { lat: 12.97, lng: 77.59 });
   assert.deepEqual(result, deterministicFallback({ ...input, location: { lat: 12.9716, lng: 77.5946 } }));

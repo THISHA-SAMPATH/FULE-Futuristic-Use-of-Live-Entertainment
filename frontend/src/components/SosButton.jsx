@@ -1,9 +1,9 @@
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
 import { AlertOctagon, Siren, X } from 'lucide-react';
-import { createSosClickHandler } from '../sosFlow.js';
+import HoldSosButton from './HoldSosButton.jsx';
 
 export function SosButton({ onClick, sending, active }) {
-  return <button className={`floating-sos ${active ? 'is-active' : ''}`} onClick={createSosClickHandler(onClick)} disabled={sending || active} aria-label={active ? 'An SOS incident is active' : 'Trigger an emergency SOS'}><Siren size={22}/><span>{sending ? 'Sending' : active ? 'SOS active' : 'SOS'}</span></button>;
+  return <HoldSosButton className={`floating-sos ${active ? 'is-active' : ''}`} onTrigger={onClick} disabled={sending || active} shortcut label={active ? 'An SOS incident is active' : 'Hold to trigger an emergency SOS'}><Siren size={22}/><span>{sending ? 'Sending' : active ? 'SOS active' : 'SOS'}</span></HoldSosButton>;
 }
 
 export function CancelToast({ incident, seconds, onCancel, onStandDown }) {

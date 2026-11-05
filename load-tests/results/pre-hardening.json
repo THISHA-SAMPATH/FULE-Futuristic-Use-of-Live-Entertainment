@@ -1,0 +1,43 @@
+{
+  "profile": {
+    "environment": "single-process local demo; in-memory repository; no PostgreSQL or Redis",
+    "concurrent_socket_clients": 1000,
+    "target_sos_per_second": 50,
+    "duration_seconds": 15,
+    "requests_sent": 657,
+    "load_window_seconds": 15,
+    "achieved_sos_per_second": 43.8
+  },
+  "alerts": {
+    "delivered": 409,
+    "missing": 0,
+    "request_errors": 248,
+    "request_error_rate": 0.3775,
+    "response_status_counts": {
+      "201": 409
+    },
+    "network_or_timeout_errors": 248,
+    "delivery_latency_ms": {
+      "p50": 12861,
+      "p95": 18255,
+      "p99": 18315
+    },
+    "request_latency_ms": {
+      "p50": 12861,
+      "p95": 18255,
+      "p99": 18316
+    }
+  },
+  "resources": {
+    "backend_rss_peak_mb": 256.85,
+    "backend_rss_final_mb": 253.75,
+    "backend_cpu_user_seconds": 9.69,
+    "backend_cpu_system_seconds": 9.52,
+    "sample_count": 18,
+    "logical_cpu_count": 4
+  },
+  "limitations": [
+    "This run does not use PostgreSQL, Redis, multiple API instances, TLS, Twitch, or a dispatch provider.",
+    "CPU and memory values are from the backend process Prometheus metrics; host, Postgres, and Redis resource use are not included."
+  ]
+}

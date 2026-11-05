@@ -112,6 +112,7 @@ test('EventSub only accepts broadcaster chat commands, suppresses repeats, and r
   await new Promise((resolve) => setTimeout(resolve, 0));
   const chat = (text, chatter = account.id) => ({ broadcaster_user_id: account.id, chatter_user_id: chatter, message: { text } });
   ws.message(notification('channel.chat.message', chat('!SOS'), 'chat-1'));
+  ws.message(notification('channel.chat.message', chat('!SOS'), 'chat-1'));
   ws.message(notification('channel.chat.message', chat('!sos'), 'chat-2'));
   ws.message(notification('channel.chat.message', chat('!safe'), 'chat-3'));
   ws.message(notification('channel.chat.message', chat('!sos', 'spoofed-user'), 'chat-4'));
@@ -124,6 +125,29 @@ test('EventSub only accepts broadcaster chat commands, suppresses repeats, and r
   assert.deepEqual(sos.map((item) => item.source), ['chat', 'redeem']);
   assert.equal(sos[0].streamer_id, account.id);
   assert.deepEqual(safe, [account.id]);
+});
+
+test('EventSub event ID claim suppresses duplicates across TwitchIntegration instances', async () => {
+  const claimed = new Set(); const sos = [];
+  const persistence = { async claimEventSubMessage(_streamerId, messageId) { if (claimed.has(messageId)) return false; claimed.add(messageId); return true; } };
+  const make = () => new TwitchIntegration({ persistence, onSos: async (payload) => sos.push(payload), onSafe: async () => {} });
+  const first = make(); const second = make();
+  const account = { id: 'broadcaster-shared', login: 'test', rewardId: 'reward-1' };
+  const message = notification('channel.channel_points_custom_reward_redemption.add', { broadcaster_user_id: account.id, reward: { id: 'reward-1', title: 'Silent SOS' } }, 'same-redemption-event');
+  const socketMessage = { data: JSON.stringify(message) };
+  await Promise.all([first.handleEventSubMessage({ account }, socketMessage), second.handleEventSubMessage({ account }, socketMessage)]);
+  assert.equal(sos.length, 1); assert.equal(sos[0].source, 'redeem');
+});
+
+test('Twitch GET retries transient server errors through the shared resilience policy', async () => {
+  let calls = 0;
+  const twitch = new TwitchIntegration({
+    clientId: 'client-id', clientSecret: 'secret', redirectUri: 'http://localhost/callback',
+    sleepImpl: async () => {},
+    fetchImpl: async () => { calls += 1; return calls < 3 ? jsonResponse(503, {}) : jsonResponse(200, { data: [{ id: 'ok' }] }); }
+  });
+  const response = await twitch.fetchWithDeadline('https://api.twitch.test/helix/users');
+  assert.equal(response.status, 200); assert.equal(calls, 3);
 });
 
 test('EventSub reconnect handoff preserves subscriptions; unexpected close retries with backoff', async () => {

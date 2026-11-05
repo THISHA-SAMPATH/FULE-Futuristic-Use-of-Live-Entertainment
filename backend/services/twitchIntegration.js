@@ -1,5 +1,6 @@
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import jwt from 'jsonwebtoken';
+import { CircuitBreaker, withRetriesAndCircuit } from './resilience.js';
 
 const API = 'https://api.twitch.tv/helix';
 const AUTH = 'https://id.twitch.tv/oauth2';
@@ -43,6 +44,7 @@ export class TwitchIntegration {
     this.reconnectAttempts = new Map();
     this.reconnectTimers = new Map();
     this.leaseTimers = new Map();
+    this.requestCircuit = new CircuitBreaker({ name: 'twitch', failureThreshold: 5, openMs: 10_000, now });
   }
 
   async hydrate() {
@@ -106,21 +108,16 @@ export class TwitchIntegration {
   async fetchWithDeadline(url, options = {}, deadline = this.now() + 15_000) {
     const remaining = Math.max(0, deadline - this.now());
     if (!remaining) throw new Error('Twitch request deadline exceeded');
-    const controller = new AbortController();
-    let timer;
-    try {
-      return await Promise.race([
-        this.fetchImpl(url, { ...options, signal: controller.signal }),
-        new Promise((_, reject) => {
-          timer = setTimeout(() => {
-            controller.abort();
-            reject(new Error('Twitch request deadline exceeded'));
-          }, remaining);
-        })
-      ]);
-    } finally {
-      clearTimeout(timer);
-    }
+    const retrySafe = !options.method || options.method.toUpperCase() === 'GET';
+    return withRetriesAndCircuit(async ({ signal }) => {
+      const response = await this.fetchImpl(url, { ...options, signal });
+      if (retrySafe && response.status >= 500) { const error = responseError(response, 'request'); error.retryable = true; throw error; }
+      return response;
+    }, {
+      name: 'Twitch API', timeoutMs: remaining, deadlineMs: remaining,
+      maxAttempts: retrySafe ? 3 : 1, baseDelayMs: 100, maxDelayMs: 500,
+      sleepImpl: this.sleepImpl, circuitBreaker: this.requestCircuit
+    });
   }
 
   async exchangeCode(code) {
@@ -480,7 +477,14 @@ export class TwitchIntegration {
     if (metadata.message_type !== 'notification') return;
     const event = payload.event || {};
     const messageId = metadata.message_id || event.id;
-    if (messageId && isRepeatedTrigger(this.seenEvents, `event:${account.id}:${messageId}`)) return;
+    if (messageId) {
+      let claimed = null;
+      try { claimed = await this.persistence?.claimEventSubMessage?.(account.id, String(messageId)); }
+      catch (error) { this.recordState(account.id, 'event_dedupe_unavailable', error.message); }
+      if (claimed === false) return;
+      if (claimed !== true && isRepeatedTrigger(this.seenEvents, `event:${account.id}:${messageId}`, this.now())) return;
+      this.seenEvents.set(`event:${account.id}:${messageId}`, this.now());
+    }
     this.pruneSeenEvents();
 
     if (metadata.subscription_type === 'channel.chat.message') {
