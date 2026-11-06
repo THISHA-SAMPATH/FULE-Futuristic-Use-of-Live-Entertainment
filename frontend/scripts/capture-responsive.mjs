@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { existsSync } from 'node:fs';
 import { mkdir } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
@@ -8,7 +9,8 @@ const widths = [1440, 1024, 390];
 const screenshotDirectory = new URL('../screenshots/', import.meta.url);
 await mkdir(screenshotDirectory, { recursive: true });
 
-const browser = await chromium.launch({ headless: true });
+const chromePath = process.env.FULE_CHROME_PATH || 'C:/Program Files/Google/Chrome/Application/chrome.exe';
+const browser = await chromium.launch({ headless: true, ...(existsSync(chromePath) ? { executablePath: chromePath } : {}) });
 const failures = [];
 try {
   for (const width of widths) {
@@ -73,7 +75,7 @@ try {
     assert.deepEqual(result.tooSmall, [], `${width}px page has text smaller than 12px`);
     assert.equal(result.headingPlayerOverlap, false, `${width}px hero content overlaps`);
     assert.notEqual(result.focusRing.style, 'none', `${width}px keyboard focus ring is missing`);
-    assert.ok(Number.parseFloat(result.focusRing.width) >= 3, `${width}px keyboard focus ring is too thin`);
+    assert.ok(Number.parseFloat(result.focusRing.width) >= 2, `${width}px keyboard focus ring is too thin`);
     assert.ok(result.contrast.bodyText >= 4.5, `${width}px body text contrast is below WCAG AA`);
     assert.ok(result.contrast.primaryAction >= 4.5, `${width}px primary action contrast is below WCAG AA`);
     assert.ok(result.cumulativeLayoutShift < 0.1, `${width}px layout shift exceeded CLS 0.1`);

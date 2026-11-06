@@ -8,7 +8,8 @@
     "build": "vite build --configLoader runner",
     "preview": "vite preview --configLoader runner --host 0.0.0.0",
     "test": "node --test",
-    "screenshots:responsive": "node scripts/capture-responsive.mjs"
+    "screenshots:responsive": "node scripts/capture-responsive.mjs",
+    "screenshots:app-shell": "node scripts/capture-app-shell.mjs"
   },
   "dependencies": {
     "@fontsource/fraunces": "^5.3.0",

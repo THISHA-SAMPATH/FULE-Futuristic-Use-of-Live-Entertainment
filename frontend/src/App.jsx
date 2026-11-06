@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { io } from 'socket.io-client';
-import { AlertTriangle, ArrowRight, BellRing, Shield, ShieldCheck, UsersRound, X } from 'lucide-react';
+import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
+import { Activity, AlertTriangle, ArrowRight, BellRing, Check, HeartHandshake, MapPin, Shield, ShieldCheck, UsersRound, X } from 'lucide-react';
 import Header from './components/Header.jsx';
 import Sidebar from './components/Sidebar.jsx';
 import Hero from './components/Hero.jsx';
 import AlertPanel from './components/AlertPanel.jsx';
+import GuardianDashboard from './components/GuardianDashboard.jsx';
 import NetworkPulse from './components/NetworkPulse.jsx';
 import MapCard from './components/MapCard.jsx';
 import { SosButton, CancelToast } from './components/SosButton.jsx';
@@ -24,8 +26,37 @@ import { API_URL } from './config.js';
 import { submitSos } from './sosFlow.js';
 import { selectFeaturedStream } from './streamAccess.js';
 const DEMO_MODE = import.meta.env.VITE_DEMO_MODE === 'true';
+const ROUTES = ['home', 'walk', 'circle', 'community', 'privacy', 'evidence', 'activity'];
+const ROUTE_TITLES = { home: 'Right now', walk: 'Safe Walk', circle: 'My Circle', community: 'Community', privacy: 'Privacy', evidence: 'Evidence', activity: 'Activity' };
+function readRoute() { const route = window.location.hash.replace(/^#\/?/, '').split('?')[0]; return ROUTES.includes(route) ? route : 'home'; }
+
+function SetupRing({ value, total = 3 }) {
+  const degrees = Math.round(value / total * 360);
+  return <div className="setup-ring" style={{ '--setup-degrees': `${degrees}deg` }} role="img" aria-label={`Safe circle setup: ${value} of ${total} complete`}><span><strong>{value}<small>/{total}</small></strong></span></div>;
+}
+
+function NextSteps() {
+  return <section className="next-steps-card" aria-labelledby="next-steps-title"><div className="route-section-heading"><div><span className="route-kicker">If you need support</span><h2 id="next-steps-title">What happens next</h2></div><span className="reassurance-copy">You stay in control.</span></div><ol className="next-steps-list"><li><span>1</span><div><strong>You choose to check in or send an SOS</strong><small>Your action starts the response flow.</small></div></li><li><span>2</span><div><strong>Your circle and eligible guardians are notified</strong><small>Public updates use an approximate area.</small></div></li><li><span>3</span><div><strong>Call 112 whenever you need immediate help</strong><small>FULE does not replace emergency services.</small></div></li></ol></section>;
+}
+
+const COMMUNITY_GROUPS = [
+  { name: 'Women’s Safety', description: 'Consent-led local check-ins and guardian support.' },
+  { name: 'Night Commute', description: 'Approximate-area check-ins for the trip home.' },
+  { name: 'Campus Watch', description: 'Campus routes, arrival check-ins and support.' },
+  { name: 'Civic Alerts', description: 'Updates from nearby public services and streets.' },
+  { name: 'Community Help', description: 'Practical neighbor support and shared resources.' },
+];
+
+function CommunityDirectory({ selected, onSelect }) {
+  return <section className="community-directory" aria-labelledby="community-directory-title"><div className="route-section-heading"><div><span className="route-kicker">Choose what matters to you</span><h2 id="community-directory-title">Safety communities</h2></div></div><div className="community-directory-grid">{COMMUNITY_GROUPS.map(({ name, description }) => <button type="button" key={name} aria-pressed={selected === name} className={`community-directory-card ${selected === name ? 'is-selected' : ''}`} onClick={() => onSelect(name)}><span className="community-mark"><UsersRound size={17}/></span><strong>{name}</strong><small>{description}</small></button>)}</div></section>;
+}
 
 export default function App() {
+  const reduceMotion = useReducedMotion();
+  const [route, setRoute] = useState(readRoute);
+  const [now, setNow] = useState(() => new Date());
+  const routePositions = useRef({});
+  const mainViewRef = useRef(null);
   const [search, setSearch] = useState('');
   const [category, setCategory] = useState('Women’s Safety');
   const [sending, setSending] = useState(false);
@@ -48,6 +79,10 @@ export default function App() {
   const [trustedStreamAccess, setTrustedStreamAccess] = useState(null);
   const [streamRequested, setStreamRequested] = useState(false);
   const [motionReady, setMotionReady] = useState(false);
+  const [circlePreferences, setCirclePreferences] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('fuleCirclePreferences') || 'null') || { name: '', phrase: '', sharing: '' }; }
+    catch { return { name: '', phrase: '', sharing: '' }; }
+  });
   const streamerSocketRef = useRef(null);
   const liveStreamRef = useRef(null);
   const demoAlerts = useDemoFeed(DEMO_MODE);
@@ -196,52 +231,100 @@ export default function App() {
   const featuredStream = selectFeaturedStream({ demoMode: DEMO_MODE, role, incidents, demoStream: DEMO_STREAMS[0] });
   const networkStats = DEMO_MODE ? DEMO_NETWORK : null;
 
+  const navigateTo = useCallback((nextRoute) => {
+    if (!ROUTES.includes(nextRoute)) return;
+    routePositions.current[route] = window.scrollY;
+    const nextHash = `#/${nextRoute}`;
+    if (window.location.hash !== nextHash) window.history.pushState({}, '', nextHash);
+    setRoute(nextRoute);
+  }, [route]);
+
+  useEffect(() => {
+    if (!window.location.hash) window.history.replaceState({}, '', `${window.location.pathname}${window.location.search}#/home`);
+    const onLocation = () => setRoute(readRoute());
+    window.addEventListener('hashchange', onLocation);
+    window.addEventListener('popstate', onLocation);
+    return () => { window.removeEventListener('hashchange', onLocation); window.removeEventListener('popstate', onLocation); };
+  }, []);
+
+  useEffect(() => {
+    document.title = `${ROUTE_TITLES[route]} · FULE`;
+    const frame = window.requestAnimationFrame(() => {
+      window.scrollTo({ top: routePositions.current[route] || 0, behavior: reduceMotion ? 'auto' : 'instant' });
+    });
+    const focusTimer = window.setTimeout(() => {
+      if (alertsOpen) return;
+      const heading = mainViewRef.current?.querySelector('.route-view [data-route-heading]');
+      heading?.focus({ preventScroll: true });
+    }, reduceMotion ? 0 : 280);
+    return () => { window.cancelAnimationFrame(frame); window.clearTimeout(focusTimer); };
+  }, [route, reduceMotion, alertsOpen]);
+
+  useEffect(() => {
+    const rememberScroll = () => { routePositions.current[route] = window.scrollY; };
+    window.addEventListener('scroll', rememberScroll, { passive: true });
+    return () => window.removeEventListener('scroll', rememberScroll);
+  }, [route]);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(new Date()), 60_000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  function saveCirclePreferences(next) {
+    setCirclePreferences(next);
+    localStorage.setItem('fuleCirclePreferences', JSON.stringify(next));
+  }
+
   function joinAsGuardian() {
-    document.getElementById('alerts')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    setAlertsOpen(true);
     window.setTimeout(() => {
-      document.querySelector('.guardian-auth-button')?.focus();
+      document.querySelector('.alert-drawer .guardian-auth-button')?.focus();
     }, 350);
   }
 
   function setUpSafeCircle() {
+    navigateTo('circle');
     if (!streamUser && !DEMO_MODE) {
-      document.querySelector('.standalone-account-button')?.click();
+      window.setTimeout(() => document.querySelector('.standalone-account-button')?.click(), 250);
       return;
     }
-    const trustedCircle = document.getElementById('trusted-circle');
-    if (trustedCircle) {
-      trustedCircle.open = true;
-      trustedCircle.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      (trustedCircle.querySelector('input, button') || trustedCircle.querySelector('summary'))?.focus({ preventScroll: true });
-      return;
-    }
-    document.querySelector('.standalone-account-button')?.click();
+    window.setTimeout(() => {
+      const trustedCircle = document.getElementById('trusted-circle');
+      trustedCircle?.querySelector('input, button, summary')?.focus({ preventScroll: true });
+    }, 250);
   }
 
   const carouselStreams = DEMO_MODE ? DEMO_STREAMS : featuredStream ? [featuredStream] : [];
-  return <div className="fule-shell gamey-shell" id="home" data-theme={active ? 'alert' : 'calm'}>
-    <Header search={search} onSearch={setSearch} onTrigger={triggerSos} onOpenAlerts={() => setAlertsOpen(true)} alertsOpen={alertsOpen} sending={sending} active={Boolean(active)} account={fuleAccount} unreadCount={activeCount} demoMode={DEMO_MODE} category={category} onCategorySelect={setCategory}/>
-    <Sidebar connection={socketStatus} role={role} demoMode={DEMO_MODE} unreadCount={activeCount} incidents={[...incidents, ...demoAlerts, ...(activeIncident ? [activeIncident] : [])]} onTrigger={triggerSos} sending={sending} active={Boolean(active)} onOpenAlerts={() => setAlertsOpen(true)} onOpenInsights={() => { const drawer = document.querySelector('.insights-drawer'); if (drawer) { drawer.open = true; drawer.scrollIntoView({ behavior: 'smooth', block: 'center' }); } }}/>
-    <main className="dashboard-content">
-      <div className="connection-strip">{!DEMO_MODE && <span className="connection-state"><i className={socketStatus === 'online' ? 'on' : ''}/>{socketStatus === 'online' ? 'Safety network is connected' : socketStatus === 'offline' ? 'Reconnecting to the safety network' : 'Connecting to the safety network'}</span>}<span className="privacy-note"><Shield size={13}/>Precise location is shared only with verified guardians</span>{!DEMO_MODE && <StandaloneAccount account={fuleAccount} onAccount={setFuleAccount}/>}</div>
-      {trustedStreamAccess && <section className="active-response-card trusted-stream-entry"><h2>Private stream shared with you</h2><p>This incident stream link is limited to the invited trusted contact and expires shortly.</p><IncidentLiveStream incident={{ incident_id: trustedStreamAccess.incidentId, status: 'PENDING_DISPATCH' }} streamerId="" streamerToken="" role="trusted_contact" guardianToken={trustedStreamAccess.token} compact/></section>}
-      {error && <div className="global-error" role="alert"><AlertTriangle size={16}/><span>{error}</span><button onClick={() => setError('')} aria-label="Dismiss error">×</button></div>}
-      <div className="main-dashboard-grid gamey-grid"><div className="feed-column gamey-feed">
+  const hour = now.getHours();
+  const greeting = hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : hour < 22 ? 'Good evening' : 'Good night';
+  const setupCount = [circlePreferences.name.trim(), circlePreferences.phrase.trim(), circlePreferences.sharing].filter(Boolean).length;
+  const terminalIncident = activeIncident && ['CANCELLED', 'FALSE_ALARM', 'RESOLVED'].includes(activeIncident.status) ? activeIncident : null;
+  const prototypeNote = 'Prototype only. Some community activity and responses are simulated. FULE does not replace emergency services; call 112 yourself when you need immediate help.';
+  const routeContent = route === 'home' ? <>
+    <div className="home-view-grid">
+      <div className="home-main-column">
+        <div className="greeting-line"><span>{greeting}</span><span className="greeting-date">{now.toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' })}</span></div>
         <Hero active={Boolean(active)} featuredStream={featuredStream} carouselStreams={carouselStreams} demoMode={DEMO_MODE} onOpenAlerts={() => setAlertsOpen(true)} onSetUpCircle={setUpSafeCircle}/>
-        <section className="active-response-card" hidden={!activeIncident}><div className="active-response-heading"><span>Live response</span><strong>{activeIncident?.dispatch_record?.status || 'Guardians alerted'}</strong></div><p className="nearby-response-count" aria-live="polite">{nearbyAccepted} nearby {nearbyAccepted === 1 ? 'guardian is' : 'guardians are'} coming</p><IncidentLiveStream ref={liveStreamRef} incident={activeIncident} streamerId={activeIncident?.streamer_id || streamUser?.id || 'demo-streamer'} streamerToken={evidenceToken} accountAccessToken={fuleAccount?.access_token || ''} role="streamer" autoStart={streamRequested}/>{activeIncident && <><DispatchTimeline incident={activeIncident}/><OperatorBrief incident={activeIncident} privateLocation/>{activeIncident.repeat_offender && <p className="repeat-offender-flag">This account has a repeated false-alarm pattern and needs review.</p>}</>}</section>
-        <section className="safety-category-filter" id="communities" aria-label="Filter safety communities"><span>Find your people</span><CategoryChips selected={category} onSelect={setCategory}/></section>
-        <section className="safety-bento" aria-label="Your safety tools">
-          <div className="bento-card safe-walk-bento" id="safe-walk"><SafeWalkPanel demoMode={DEMO_MODE} streamer={streamUser} accessToken={fuleAccount?.access_token || ''} activeIncident={activeIncident} onEmergency={handleSafeWalkEmergency}/></div>
-          <div className="bento-card trusted-bento"><div className="bento-card-heading"><span className="bento-illustration trusted-illustration"><UsersRound size={21}/></span><div><h2>Your trusted circle</h2><p>People FULE can reach if you need backup.</p></div></div><TrustedContacts streamerId={streamUser?.id || 'demo-streamer'} connected={Boolean(streamUser)} accessToken={fuleAccount?.access_token || ''} demoMode={DEMO_MODE} compact/></div>
-          <div className="bento-card evidence-bento"><div className="bento-card-heading"><span className="bento-illustration evidence-illustration"><ShieldCheck size={21}/></span><div><h2>Evidence vault</h2><p>Private recordings and incident case files.</p></div></div><p className="bento-detail">When an incident is active, choose encrypted audio or video capture. Verified guardians can review the tamper-evident case file.</p>{activeIncident ? <EvidenceRecorder incident={activeIncident} streamerToken={evidenceToken}/> : <button className="bento-text-link" type="button" onClick={() => setAlertsOpen(true)}>View incident records <ArrowRight size={14}/></button>}</div>
-          <div className="bento-card guardian-bento" id="guardians"><TopGuardiansSection demoMode={DEMO_MODE} search={search} title="Guardians nearby"/></div>
-        </section>
-        <LiveStreamsSection demoMode={DEMO_MODE} incidents={filteredIncidents} search={search} category={category}/>
-        {DEMO_MODE && <details className="demo-drawer"><summary>Demo controls <span>Simulated triggers · no real contacts</span></summary><DemoTriggers onTrigger={triggerSos} disabled={Boolean(active)} sending={sending}/></details>}
-        <details className="insights-drawer"><summary>Demo &amp; Insights <span>Network pulse and anonymized map</span></summary><div className="insights-content"><NetworkPulse stats={networkStats} demoMode={DEMO_MODE}/><MapCard incidents={incidents} demoMode={DEMO_MODE}/></div></details>
-        <section className="alarm-option-card" id="settings"><span className="alarm-option-icon"><BellRing size={17}/></span><span><strong>Incident triage context</strong><small>Choose how sensitive the local rules should be to your stated risk.</small></span><label className="triage-risk-control" htmlFor="triage-risk">Risk level<select id="triage-risk" value={riskLevel} onChange={(event) => setRiskLevel(event.target.value)}><option value="standard">Standard</option><option value="elevated">Elevated</option><option value="high">High</option></select></label><span className="alarm-option-separator"><strong>Loud emergency alarm</strong><small>Play an audible signal during your active SOS.</small></span><input type="checkbox" checked={alarmEnabled} onChange={(event) => setAlarmEnabled(event.target.checked)} aria-label="Toggle loud emergency alarm"/><button type="button" className="shake-sos-enable" onClick={enableShakeSOS} disabled={motionReady} aria-label="Enable shake gesture for emergency SOS">{motionReady ? 'Shake SOS enabled' : 'Enable shake SOS'}</button></section>
-      </div></div>
-      <footer className="page-footer"><span>FULE · Futuristic Use of Live Entertainment</span><span>Community safety, with consent and privacy</span></footer>
+        {activeIncident && <section className="active-response-card home-active-response"><div className="active-response-heading"><span>Live response</span><strong>{activeIncident?.dispatch_record?.status || 'Guardians alerted'}</strong></div><p className="nearby-response-count" aria-live="polite">{nearbyAccepted} nearby {nearbyAccepted === 1 ? 'guardian is' : 'guardians are'} coming</p><IncidentLiveStream ref={liveStreamRef} incident={activeIncident} streamerId={activeIncident?.streamer_id || streamUser?.id || 'demo-streamer'} streamerToken={evidenceToken} accountAccessToken={fuleAccount?.access_token || ''} role="streamer" autoStart={streamRequested}/><DispatchTimeline incident={activeIncident}/><OperatorBrief incident={activeIncident} privateLocation/>{activeIncident.repeat_offender && <p className="repeat-offender-flag">This account has repeated false alarms and needs review.</p>}</section>}
+        {terminalIncident && <section className="safe-completion-card" role="status"><span className="completion-check"><Check size={22}/></span><div><h2>You’re safe</h2><p>Your check-in is complete. {terminalIncident.acknowledged_by ? 'A guardian responded.' : 'You can take a moment before continuing.'}</p></div></section>}
+      </div>
+      <aside className="home-side-column"><section className="circle-progress-card"><SetupRing value={setupCount}/><div><span className="route-kicker">A little peace of mind</span><h2>Safe circle setup</h2><p>{setupCount} of 3 personal choices saved</p><button type="button" className="quiet-action" onClick={() => navigateTo('circle')}>Review my circle <ArrowRight size={15}/></button></div></section><NextSteps/><section className="reassurance-card"><ShieldCheck size={17}/><p>Location stays approximate in the public view. You decide when to check in or ask for help.</p></section></aside>
+    </div>
+    {DEMO_MODE && <details className="demo-drawer home-disclosure"><summary>Demo controls <span>Open only when you want to explore the simulated flow</span></summary><DemoTriggers onTrigger={triggerSos} disabled={Boolean(active)} sending={sending}/></details>}
+    <details className="insights-drawer home-disclosure"><summary>Network and area insights <span>{DEMO_MODE ? 'Illustrative community view' : 'Available when connected'}</span></summary><div className="insights-content"><NetworkPulse stats={networkStats} demoMode={DEMO_MODE}/><MapCard incidents={incidents} demoMode={DEMO_MODE}/></div></details>
+  </> : route === 'walk' ? <section className="route-intro-card walk-route-intro"><span className="route-kicker">A quiet check-in</span><h2 data-route-heading tabIndex={-1}>Take your time getting there.</h2><p>Choose a destination and check-in pace. Your safe-walk timer stays here, easy to find.</p><div className="reassurance-row"><ShieldCheck size={17}/>Your location is private to your safe-walk session and eligible responders.</div>{activeIncident && <div className="route-inline-status"><strong>There is an active incident</strong><button type="button" onClick={() => setAlertsOpen(true)}>Open response details</button></div>}</section> : route === 'circle' ? <div className="route-two-column circle-route"><div className="circle-main-column"><section className="route-content-card personalization-card"><div className="route-section-heading"><div><span className="route-kicker">Personalize your support</span><h2 data-route-heading tabIndex={-1}>Make this circle yours.</h2></div><SetupRing value={setupCount}/></div><p>Name your circle, choose a check-in phrase, and decide what location detail is appropriate for your setup.</p><div className="personalization-fields"><label>Circle name<input value={circlePreferences.name} onChange={(event) => saveCirclePreferences({ ...circlePreferences, name: event.target.value })} maxLength={48} placeholder="e.g. My people"/></label><label>Check-in phrase<input value={circlePreferences.phrase} onChange={(event) => saveCirclePreferences({ ...circlePreferences, phrase: event.target.value })} maxLength={80} placeholder="e.g. I’m on my way"/></label><label>Location sharing preference<select value={circlePreferences.sharing} onChange={(event) => saveCirclePreferences({ ...circlePreferences, sharing: event.target.value })}><option value="">Choose a preference</option><option value="approximate">Approximate area in public updates</option><option value="circle">Share exact location with my circle</option></select></label></div><small className="reassurance-copy">Your preferences are saved on this device. Incident access still follows account and guardian permissions.</small></section><section className="route-content-card"><h2>Your trusted contacts</h2><p>Up to three people you choose. They may be notified if guardians have not acknowledged.</p><TrustedContacts streamerId={streamUser?.id || 'demo-streamer'} connected={Boolean(streamUser)} accessToken={fuleAccount?.access_token || ''} demoMode={DEMO_MODE} compact/></section><section className="route-content-card circle-controls-card"><h2>Your response preferences</h2><label className="triage-risk-control" htmlFor="triage-risk">Incident triage sensitivity<select id="triage-risk" value={riskLevel} onChange={(event) => setRiskLevel(event.target.value)}><option value="standard">Standard</option><option value="elevated">Elevated</option><option value="high">High</option></select></label><label className="alarm-toggle-row"><span><strong>Loud emergency alarm</strong><small>Play an audible signal during your active SOS.</small></span><input type="checkbox" checked={alarmEnabled} onChange={(event) => setAlarmEnabled(event.target.checked)} aria-label="Toggle loud emergency alarm"/></label><button type="button" className="secondary-action" onClick={enableShakeSOS} disabled={motionReady}>{motionReady ? 'Shake SOS enabled' : 'Enable shake SOS'}</button>{!DEMO_MODE && <StandaloneAccount account={fuleAccount} onAccount={setFuleAccount}/>}</section></div><aside className="circle-side-column"><section className="route-content-card guardian-preview-card"><div className="route-section-heading"><div><span className="route-kicker">People nearby</span><h2>Guardian response</h2></div><HeartHandshake size={22}/></div><TopGuardiansSection demoMode={DEMO_MODE} search={search} title="Guardians nearby"/><button className="secondary-action" type="button" onClick={joinAsGuardian}>Explore guardian access</button><p className="reassurance-copy">Responders are encouraged to observe, call for help, and assist when safe. Never confront.</p></section><details className="route-content-card guardian-demo-disclosure"><summary>Open guardian demo and live alerts</summary><GuardianDashboard search={search} demoMode={DEMO_MODE} demoAlerts={demoAlerts} account={fuleAccount}/></details></aside></div> : route === 'community' ? <div className="community-route"><section className="route-section-heading community-heading"><div><span className="route-kicker">Find your people</span><h2 data-route-heading tabIndex={-1}>A little support, close by.</h2><p>Browse community spaces and preview shared safety streams.</p></div><span className="community-privacy-note"><ShieldCheck size={16}/>No exact locations shown</span></section><section className="safety-category-filter" aria-label="Filter safety communities"><CategoryChips selected={category} onSelect={setCategory}/></section><CommunityDirectory selected={category} onSelect={setCategory}/><LiveStreamsSection demoMode={DEMO_MODE} incidents={filteredIncidents} search={search} category={category}/><section className="community-guardians-row"><TopGuardiansSection demoMode={DEMO_MODE} search={search} title="Guardians in the community"/></section></div> : route === 'privacy' ? <div className="route-two-column privacy-route"><section className="route-intro-card"><span className="route-kicker">Who can see what</span><h2 data-route-heading tabIndex={-1}>Your location has boundaries.</h2><p>Exact incident details are restricted to verified, eligible responders. Public updates are approximate.</p><div className="privacy-audience-list"><article><span>Public view</span><strong>Approximate area only</strong><small>No exact coordinates or private contact details.</small></article><article><span>Your trusted circle</span><strong>Consent-based access</strong><small>Details depend on your setup and active response.</small></article><article><span>Verified guardians</span><strong>Incident-specific access</strong><small>Exact details are available only when authorized.</small></article></div></section><section className="route-content-card privacy-map-card"><MapCard incidents={incidents} demoMode={DEMO_MODE}/><p className="reassurance-row"><MapPin size={16}/>Illustrative neighborhood map. It does not show a public person-level pin.</p></section></div> : route === 'evidence' ? <div className="route-two-column evidence-route"><section className="route-intro-card"><span className="route-kicker">Private by design</span><h2 data-route-heading tabIndex={-1}>Evidence, when an incident needs it.</h2><p>Recording and case-file access depend on an active incident and authorized account permissions.</p><div className="evidence-state-card">{activeIncident ? <><strong>Active incident evidence</strong><EvidenceRecorder incident={activeIncident} streamerToken={evidenceToken}/></> : <><ShieldCheck size={22}/><strong>No active incident evidence</strong><span>Nothing new is being recorded right now.</span></>}</div><p className="reassurance-copy">Access depends on incident status and your account permissions.</p></section><section className="route-content-card evidence-history-card"><GuardianDashboard search={search} demoMode={DEMO_MODE} demoAlerts={demoAlerts} account={fuleAccount}/></section></div> : <div className="activity-route"><section className="route-section-heading"><div><span className="route-kicker">Your incident history</span><h2 data-route-heading tabIndex={-1}>Updates, in one place.</h2><p>History is shown according to your account’s access.</p></div><button type="button" className="secondary-action" onClick={() => setAlertsOpen(true)}><Activity size={16}/>Open live alerts</button></section><GuardianDashboard search={search} demoMode={DEMO_MODE} demoAlerts={demoAlerts} account={fuleAccount}/></div>;
+
+  return <div className="fule-shell app-shell" data-theme={active ? 'alert' : 'calm'} data-time-tone={hour >= 20 || hour < 6 ? 'night' : 'day'}>
+    <Header search={search} onSearch={setSearch} onTrigger={triggerSos} onOpenAlerts={() => setAlertsOpen(true)} alertsOpen={alertsOpen} sending={sending} active={Boolean(active)} account={fuleAccount} unreadCount={activeCount} demoMode={DEMO_MODE} route={route}/>
+    <Sidebar connection={socketStatus} role={role} demoMode={DEMO_MODE} unreadCount={activeCount} incidents={[...incidents, ...demoAlerts, ...(activeIncident ? [activeIncident] : [])]} route={route} onTrigger={triggerSos} sending={sending} active={Boolean(active)} onOpenAlerts={() => setAlertsOpen(true)}/>
+    <main className={`dashboard-content app-main ${route === 'walk' ? 'is-walk-view' : ''}`} ref={mainViewRef} id="main-content">
+      <div className="prototype-banner" role="note"><strong>Prototype only</strong><span>Demo activity may be simulated. FULE does not replace emergency services.</span></div>
+      {trustedStreamAccess && <section className="route-content-card trusted-stream-entry"><h2>Private stream shared with you</h2><p>This incident stream link is limited to the invited trusted contact and expires shortly.</p><IncidentLiveStream incident={{ incident_id: trustedStreamAccess.incidentId, status: 'PENDING_DISPATCH' }} streamerId="" streamerToken="" role="trusted_contact" guardianToken={trustedStreamAccess.token} compact/></section>}
+      {error && <div className="global-error" role="alert"><AlertTriangle size={16}/><span>{error}</span><button onClick={() => setError('')} aria-label="Dismiss error">×</button></div>}
+      <AnimatePresence mode="wait" initial={false}><motion.section className="route-view" key={route} aria-label={`${ROUTE_TITLES[route]} view`} initial={reduceMotion ? false : { opacity: 0, x: 8 }} animate={{ opacity: 1, x: 0 }} exit={reduceMotion ? undefined : { opacity: 0, x: -6 }} transition={{ duration: reduceMotion ? 0 : .25 }} onAnimationComplete={() => { const heading = mainViewRef.current?.querySelector('[data-route-heading]'); if (heading) heading.focus({ preventScroll: true }); }}>{routeContent}</motion.section></AnimatePresence>
+      <div className="persistent-walk-panel" hidden={route !== 'walk'}><section className="route-content-card"><SafeWalkPanel demoMode={DEMO_MODE} streamer={streamUser} accessToken={fuleAccount?.access_token || ''} activeIncident={activeIncident} onEmergency={handleSafeWalkEmergency}/></section></div>
+      <footer className="page-footer"><span>FULE · Futuristic Use of Live Entertainment</span><span>Safety support with consent, privacy, and choice</span></footer>
     </main>
     {alertsOpen && <div className="drawer-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setAlertsOpen(false); }}><section className="alert-drawer" role="dialog" aria-modal="true" aria-label="Emergency alerts"><button className="drawer-close" onClick={() => setAlertsOpen(false)} aria-label="Close alerts"><X size={18}/></button><AlertPanel search={search} onIncidentsChange={setIncidents} onRoleChange={setRole} onStatus={setSocketStatus} demoMode={DEMO_MODE} demoAlerts={demoAlerts} account={fuleAccount}/></section></div>}
     <SosButton onClick={triggerSos} sending={sending} active={Boolean(active)}/>
