@@ -40,6 +40,15 @@ test('scoring accounts for silence, nighttime and user-selected risk', () => {
   assert.ok(scoreIncident({ ...base, audio_transcript_snippet: '' }).score > scoreIncident(base).score);
 });
 
+test('generalized violence language and duress/check-in source context raise triage without phrase-specific rules', () => {
+  const triage = createRuleBasedTriage();
+  for (const text of ['Someone is hurting me right now.', 'I was assaulted near the station.', 'An attacker is outside.', 'I cannot leave this room.']) {
+    assert.equal(triage.analyze({ audio_transcript_snippet: text, source: 'button', local_hour: 12 }).threat_level, 'CRITICAL', text);
+  }
+  assert.equal(triage.analyze({ audio_transcript_snippet: '', source: 'duress_pin', local_hour: 12, risk_level: 'elevated' }).threat_level, 'CRITICAL');
+  assert.equal(triage.analyze({ audio_transcript_snippet: '', source: 'safe_walk_timeout', local_hour: 12 }).threat_level, 'ELEVATED');
+});
+
 test('triage can be replaced behind the engine interface', async () => {
   const custom = { name: 'test-local-model', analyze: () => ({ threat_level: 'LOW', summary: 'local model', recommended_action: 'CHECK_IN' }) };
   setTriageEngine(custom);

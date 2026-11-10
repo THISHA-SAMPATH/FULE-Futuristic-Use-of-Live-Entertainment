@@ -1,5 +1,6 @@
 const URGENT = [
-  [/\b(attack|assault|weapon|gun|knife|threatened|being followed|following me|won't leave|trapped|help me now|being hurt|duress)\b/i, 8],
+  [/\b(attack\w*|assault\w*|weapon|gun|knife|threat\w*|hurt\w*|harm\w*|trap\w*|being followed|following me|won't leave|help me now|duress)\b/i, 8],
+  [/\b(?:cannot|can't|unable to)\s+(?:leave|escape|get away|move)\b/i, 8],
   [/\b(help|emergency|unsafe|scared|harass(?:ed|ment)|stalk(?:ed|ing)|panic|can't get away)\b/i, 5],
   [/\b(alone|lost|uncomfortable|concerned|suspicious|need someone)\b/i, 2]
 ];
@@ -22,6 +23,7 @@ function scoreIncident({ audio_transcript_snippet = '', source = 'button', local
     if (pattern.test(text)) { score += weight; signals.push(pattern.source.replaceAll('\\b', '').replace(/[()|?]/g, '')); }
   }
   if (['button', 'shake', 'keyboard'].includes(source)) score += 3;
+  if (['duress_pin', 'safe_walk_duress'].includes(source)) score += 8;
   if (!text) score += 4;
   if (local_hour >= 22 || local_hour < 5) score += 1;
   if (risk_level === 'high') score += 4;

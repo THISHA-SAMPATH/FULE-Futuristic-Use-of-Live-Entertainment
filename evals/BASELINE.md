@@ -1,43 +1,43 @@
 # Rule Triage Baseline
 
-- Dataset version: 1.0.0
-- Dataset size: 100 synthetic scenarios
-- Engine: rule-based
-- Method: one pass per scenario using createRuleBasedTriage().analyze(input); expected labels are hand-authored in the versioned synthetic dataset. No training or tuning was performed during evaluation.
-- Accuracy: 65/100 (65.0%)
+- Dataset version: 1.0.0; 100 synthetic, author-written scenarios.
+- Split: stratified random split by expected threat level, seed 20261110, 70/30 dev/test; assignments are stored per scenario in the dataset file.
+- Method: single deterministic inference per scenario using the current rule engine. No training; the pre-change snapshot was captured before modifying the rules.
+- The test split is held out from rule changes. It is reported only as aggregate metrics; no test scenarios or individual test errors are printed.
 
-## Per-class metrics
+## Before and after
 
-| Threat level | Precision | Recall | Support | TP | FP | FN |
-|---|---:|---:|---:|---:|---:|---:|
-| LOW | 100.0% | 35.0% | 40 | 14 | 0 | 26 |
-| ELEVATED | 38.5% | 100.0% | 20 | 20 | 32 | 0 |
-| CRITICAL | 91.2% | 77.5% | 40 | 31 | 3 | 9 |
+| Split | Version | N | Accuracy | LOW precision | LOW recall | ELEVATED precision | ELEVATED recall | CRITICAL precision | CRITICAL recall |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| dev | Before | 70 | 64.3% | 100.0% | 25.0% | 37.8% | 100.0% | 92.3% | 85.7% |
+| dev | After | 70 | 70.0% | 100.0% | 25.0% | 42.4% | 100.0% | 93.3% | 100.0% |
+| test | Before | 30 | 66.7% | 100.0% | 58.3% | 40.0% | 100.0% | 87.5% | 58.3% |
+| test | After | 30 | 83.3% | 100.0% | 58.3% | 60.0% | 100.0% | 92.3% | 100.0% |
 
-## Confusion matrix
+## Dev confusion matrix after changes
 
 Rows are expected labels; columns are predicted labels.
 
 | Expected \ Predicted | LOW | ELEVATED | CRITICAL |
 |---|---:|---:|---:|
-| LOW | 14 | 23 | 3 |
-| ELEVATED | 0 | 20 | 0 |
-| CRITICAL | 0 | 9 | 31 |
+| LOW | 7 | 19 | 2 |
+| ELEVATED | 0 | 14 | 0 |
+| CRITICAL | 0 | 0 | 28 |
 
-## False negatives (9)
+## Test confusion matrix after changes (aggregate only)
 
-False negative means the engine predicted a lower threat level than the scenario label.
+| Expected \ Predicted | LOW | ELEVATED | CRITICAL |
+|---|---:|---:|---:|
+| LOW | 7 | 4 | 1 |
+| ELEVATED | 0 | 6 | 0 |
+| CRITICAL | 0 | 0 | 12 |
 
-- explicit_help-005 (explicit_help): expected CRITICAL, predicted ELEVATED; input: {"audio_transcript_snippet":"Someone is hurting me right now.","source":"button","local_hour":1,"risk_level":"standard"}
-- explicit_help-008 (explicit_help): expected CRITICAL, predicted ELEVATED; input: {"audio_transcript_snippet":"I was assaulted near the station.","source":"button","local_hour":23,"risk_level":"standard"}
-- explicit_help-015 (explicit_help): expected CRITICAL, predicted ELEVATED; input: {"audio_transcript_snippet":"An attacker is outside and will not leave.","source":"button","local_hour":17,"risk_level":"elevated"}
-- explicit_help-019 (explicit_help): expected CRITICAL, predicted ELEVATED; input: {"audio_transcript_snippet":"I cannot leave and need someone immediately.","source":"button","local_hour":17,"risk_level":"elevated"}
-- quiet_duress-003 (quiet_duress): expected CRITICAL, predicted ELEVATED; input: {"audio_transcript_snippet":"","source":"duress_pin","local_hour":17,"risk_level":"elevated"}
-- quiet_duress-007 (quiet_duress): expected CRITICAL, predicted ELEVATED; input: {"audio_transcript_snippet":"","source":"duress_pin","local_hour":17,"risk_level":"elevated"}
-- quiet_duress-011 (quiet_duress): expected CRITICAL, predicted ELEVATED; input: {"audio_transcript_snippet":"","source":"duress_pin","local_hour":17,"risk_level":"elevated"}
-- quiet_duress-015 (quiet_duress): expected CRITICAL, predicted ELEVATED; input: {"audio_transcript_snippet":"","source":"duress_pin","local_hour":17,"risk_level":"elevated"}
-- quiet_duress-019 (quiet_duress): expected CRITICAL, predicted ELEVATED; input: {"audio_transcript_snippet":"","source":"duress_pin","local_hour":17,"risk_level":"elevated"}
+## Dev false negatives (0)
 
-## Interpretation
+Listed for development error analysis only. No scenario-level test results are included.
 
-This is a small synthetic diagnostic set, not evidence of real-world safety performance. It measures agreement with authored labels only; it does not establish calibration, robustness, demographic fairness, or suitability for dispatch decisions.
+- None.
+
+## Limitations
+
+The dataset is small, synthetic, author-written, and not representative of real incident reports. Scores measure agreement with these labels only; they do not establish real-world safety, calibration, robustness, or fairness.

@@ -11,7 +11,8 @@
     "start": "npm --prefix backend start",
     "test": "npm --prefix backend test && npm --prefix frontend test",
     "build": "npm --prefix frontend run build",
-    "load:test:baseline": "node load-tests/run-local-baseline.mjs"
+    "load:test:baseline": "node load-tests/run-local-baseline.mjs",
+    "smoke:livekit": "node scripts/livekit-minio-smoke.mjs"
   },
   "devDependencies": {
     "concurrently": "^9.1.2"

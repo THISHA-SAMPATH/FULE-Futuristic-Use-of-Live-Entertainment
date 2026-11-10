@@ -92,13 +92,25 @@ The above setup instructions describe supported wiring. They are not proof that 
 
 ## Rule triage evaluation
 
-The current rules are evaluated against a versioned synthetic dataset; these scores measure agreement with authored labels and are not real-world safety validation.
+The current rules are evaluated against a small, synthetic, author-written dataset; these scores measure agreement with its labels and are not real-world safety validation.
 
 ```powershell
 node evals/run-triage-eval.mjs
 ```
 
 The script writes `evals/BASELINE.md`. To regenerate the deterministic dataset, run `node evals/generate-triage-dataset.mjs` first.
+
+The dataset is small, synthetic, and author-written. It is useful for deterministic rule regression checks only and must not be presented as evidence of real-world safety performance.
+
+## Live media integration smoke test
+
+With Docker Desktop running, copy `.env.example` to `.env` and set local development secrets, then run:
+
+```powershell
+npm run smoke:livekit
+```
+
+The script runs `docker compose up -d --build` with demo mode disabled, creates a throwaway account and incident, publishes generated video to a real local LiveKit room for five seconds, waits for Egress to write the recording to MinIO, verifies the stored object's SHA-256 against the evidence row, and removes its throwaway incident/account and recording. It requires Docker, browser binaries installed for Playwright, and the Compose media stack. A pass is reported only after object bytes and the recorded hash match. This smoke test is separate from the regular unit suite.
 
 ## Configuration
 

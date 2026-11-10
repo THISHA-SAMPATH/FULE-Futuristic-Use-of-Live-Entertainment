@@ -3,6 +3,8 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const output = resolve(dirname(fileURLToPath(import.meta.url)), 'triage_scenarios.json');
+const SPLIT_SEED = 20261110;
+const DEV_RATIO = 0.7;
 const groups = [
   {
     category: 'explicit_help', expected: 'CRITICAL', source: 'button', risk: 'standard',
@@ -78,6 +80,28 @@ for (const group of groups) {
   });
 }
 
+function seededRandom(seed) {
+  let value = seed >>> 0;
+  return () => {
+    value += 0x6D2B79F5;
+    let next = value;
+    next = Math.imul(next ^ (next >>> 15), next | 1);
+    next ^= next + Math.imul(next ^ (next >>> 7), next | 61);
+    return ((next ^ (next >>> 14)) >>> 0) / 4_294_967_296;
+  };
+}
+
+for (const [classIndex, label] of ['LOW', 'ELEVATED', 'CRITICAL'].entries()) {
+  const members = scenarios.filter((scenario) => scenario.expected_threat_level === label);
+  const random = seededRandom(SPLIT_SEED + classIndex * 10_007);
+  for (let index = members.length - 1; index > 0; index -= 1) {
+    const swapIndex = Math.floor(random() * (index + 1));
+    [members[index], members[swapIndex]] = [members[swapIndex], members[index]];
+  }
+  const devCount = Math.round(members.length * DEV_RATIO);
+  members.forEach((scenario, index) => { scenario.split = index < devCount ? 'dev' : 'test'; });
+}
+
 await mkdir(dirname(output), { recursive: true });
-await writeFile(output, `${JSON.stringify({ dataset_version: '1.0.0', description: 'Synthetic, non-personal rule-triage evaluation cases.', scenario_count: scenarios.length, scenarios }, null, 2)}\n`);
+await writeFile(output, `${JSON.stringify({ dataset_version: '1.0.0', description: 'Synthetic, non-personal, author-written rule-triage evaluation cases.', split: { strategy: 'stratified random split by expected threat level', dev_ratio: DEV_RATIO, test_ratio: 1 - DEV_RATIO, seed: SPLIT_SEED }, scenario_count: scenarios.length, scenarios }, null, 2)}\n`);
 console.log(`Wrote ${scenarios.length} versioned synthetic scenarios to ${output}`);

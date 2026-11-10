@@ -1,0 +1,155 @@
+{
+  "dataset_version": "1.0.0",
+  "split": {
+    "strategy": "stratified random split by expected threat level",
+    "dev_ratio": 0.7,
+    "test_ratio": 0.30000000000000004,
+    "seed": 20261110
+  },
+  "engine": "rule-based",
+  "evaluated_at": "2026-11-10T08:48:55.758Z",
+  "dev": {
+    "size": 70,
+    "accuracy": 0.6428571428571429,
+    "per_class": {
+      "LOW": {
+        "precision": 1,
+        "recall": 0.25,
+        "support": 28,
+        "tp": 7,
+        "fp": 0,
+        "fn": 21
+      },
+      "ELEVATED": {
+        "precision": 0.3783783783783784,
+        "recall": 1,
+        "support": 14,
+        "tp": 14,
+        "fp": 23,
+        "fn": 0
+      },
+      "CRITICAL": {
+        "precision": 0.9230769230769231,
+        "recall": 0.8571428571428571,
+        "support": 28,
+        "tp": 24,
+        "fp": 2,
+        "fn": 4
+      }
+    },
+    "confusion": {
+      "LOW": {
+        "LOW": 7,
+        "ELEVATED": 19,
+        "CRITICAL": 2
+      },
+      "ELEVATED": {
+        "LOW": 0,
+        "ELEVATED": 14,
+        "CRITICAL": 0
+      },
+      "CRITICAL": {
+        "LOW": 0,
+        "ELEVATED": 4,
+        "CRITICAL": 24
+      }
+    },
+    "dev_false_negatives": [
+      {
+        "scenario_id": "explicit_help-005",
+        "category": "explicit_help",
+        "expected_threat_level": "CRITICAL",
+        "predicted_threat_level": "ELEVATED",
+        "input": {
+          "audio_transcript_snippet": "Someone is hurting me right now.",
+          "source": "button",
+          "local_hour": 1,
+          "risk_level": "standard"
+        }
+      },
+      {
+        "scenario_id": "explicit_help-015",
+        "category": "explicit_help",
+        "expected_threat_level": "CRITICAL",
+        "predicted_threat_level": "ELEVATED",
+        "input": {
+          "audio_transcript_snippet": "An attacker is outside and will not leave.",
+          "source": "button",
+          "local_hour": 17,
+          "risk_level": "elevated"
+        }
+      },
+      {
+        "scenario_id": "quiet_duress-003",
+        "category": "quiet_duress",
+        "expected_threat_level": "CRITICAL",
+        "predicted_threat_level": "ELEVATED",
+        "input": {
+          "audio_transcript_snippet": "",
+          "source": "duress_pin",
+          "local_hour": 17,
+          "risk_level": "elevated"
+        }
+      },
+      {
+        "scenario_id": "quiet_duress-011",
+        "category": "quiet_duress",
+        "expected_threat_level": "CRITICAL",
+        "predicted_threat_level": "ELEVATED",
+        "input": {
+          "audio_transcript_snippet": "",
+          "source": "duress_pin",
+          "local_hour": 17,
+          "risk_level": "elevated"
+        }
+      }
+    ]
+  },
+  "test": {
+    "size": 30,
+    "accuracy": 0.6666666666666666,
+    "per_class": {
+      "LOW": {
+        "precision": 1,
+        "recall": 0.5833333333333334,
+        "support": 12,
+        "tp": 7,
+        "fp": 0,
+        "fn": 5
+      },
+      "ELEVATED": {
+        "precision": 0.4,
+        "recall": 1,
+        "support": 6,
+        "tp": 6,
+        "fp": 9,
+        "fn": 0
+      },
+      "CRITICAL": {
+        "precision": 0.875,
+        "recall": 0.5833333333333334,
+        "support": 12,
+        "tp": 7,
+        "fp": 1,
+        "fn": 5
+      }
+    },
+    "confusion": {
+      "LOW": {
+        "LOW": 7,
+        "ELEVATED": 4,
+        "CRITICAL": 1
+      },
+      "ELEVATED": {
+        "LOW": 0,
+        "ELEVATED": 6,
+        "CRITICAL": 0
+      },
+      "CRITICAL": {
+        "LOW": 0,
+        "ELEVATED": 5,
+        "CRITICAL": 7
+      }
+    }
+  }
+}
