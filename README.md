@@ -19,12 +19,20 @@ flowchart LR
   API --> Dispatch[Simulated control room]
 ```
 
-### What is real vs simulated
+### Implementation status: wired, tested, and still unverified
 
-- **Real in a configured deployment:** FULE email/password accounts, bcrypt password hashes, rotating refresh tokens, role checks, admin-approved guardian verification, PostgreSQL persistence, Redis fan-out and timers, in-app alerts, Web Push, local rule triage, private incident room authorization, encrypted evidence chunks, hash-chain verification, and the internal dispatch simulation.
-- **Requires local infrastructure and user permission:** live camera/microphone streaming, relay through coturn, server-side recording through Egress, and browser push delivery. See `.env.example` for required settings.
-- **Demo only:** synthetic incident coordinates, generated looping test video, demo dispatch records, and the demo account-free SOS flow. Demo dispatch never contacts authorities.
-- **Not implemented as a real-world emergency integration:** FULE does not call emergency services. The app provides a one-tap `tel:112` link for the user to call directly.
+The code has integration points for the following self-hosted components. “Wired” means application code/configuration calls the component; it does not mean a complete remote deployment has been exercised. Tests are primarily unit or mocked integration tests unless stated otherwise.
+
+| Component | Code status | Test evidence | Not verified here |
+|---|---|---|---|
+| PostgreSQL | Wired through Knex repositories and migrations when `DATABASE_URL` is set; file-backed storage is used otherwise. | CI starts PostgreSQL, applies migrations, runs integration tests and the index/`EXPLAIN` check. | A live production database, backups, failover, and operational recovery. |
+| Redis / BullMQ | Wired for Socket.IO fan-out, shared rate limits, escalation/safe-walk jobs, and cleanup when `REDIS_URL` is set. | CI starts Redis and checks connectivity; rate-limit and job logic have unit coverage. | Multi-instance delivery and timer recovery under real process failures/load. |
+| LiveKit | Token/room/egress code is wired when LiveKit credentials and URLs are configured. | Mocked service tests verify token scope, revocation, recording callback handling, and evidence hashing. | Real camera-to-guardian media, network traversal, and recording in a deployed SFU. |
+| coturn | Compose service and short-lived TURN credential generation are wired. | Unit test verifies generated participant-scoped credentials. | A real TURN allocation or traversal test from external networks. |
+| MinIO | S3-compatible recording, object read/delete, and retention code are wired through the AWS S3 SDK. | Mocked object-reader/deleter tests cover hashing and retention logic. | A real upload/read/delete cycle against a running MinIO instance. |
+| Web Push | VAPID-based delivery is wired and activates only when public/private keys are configured. | Subscription validation and persistence are tested; push transport delivery is not. | Browser push delivery through a real browser push service. |
+
+The default local demo uses synthetic coordinates, generated test video, file-backed persistence, and simulated dispatch. Live video, push delivery, and durable multi-instance jobs require configuration and running infrastructure. The dispatch room is always a simulation; FULE does not call emergency services. The app provides a direct `tel:112` link for the user to call.
 
 ## Start the complete local stack
 
@@ -79,6 +87,18 @@ Members register with email and a password (minimum 12 characters); passwords ar
 - Egress recordings are written to MinIO; each completed recording is hashed into the evidence chain. `LIVEKIT_RECORDING_RETENTION_DAYS` controls recording retention.
 - Generate VAPID key material locally using `npx web-push generate-vapid-keys`; put the resulting keys in the backend environment. Keep private keys on the server.
 - Browsers may deliver Web Push through their configured push transport. FULE does not use a text-message provider.
+
+The above setup instructions describe supported wiring. They are not proof that an installation is healthy; use `/api/health`, `/api/ready`, backend logs, and the component-specific tests, then perform a deployment smoke test before relying on it.
+
+## Rule triage evaluation
+
+The current rules are evaluated against a versioned synthetic dataset; these scores measure agreement with authored labels and are not real-world safety validation.
+
+```powershell
+node evals/run-triage-eval.mjs
+```
+
+The script writes `evals/BASELINE.md`. To regenerate the deterministic dataset, run `node evals/generate-triage-dataset.mjs` first.
 
 ## Configuration
 

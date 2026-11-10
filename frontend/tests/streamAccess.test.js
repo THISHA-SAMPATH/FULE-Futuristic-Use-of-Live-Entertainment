@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { selectFeaturedStream } from '../src/streamAccess.js';
+import { selectFeaturedStream } from '../src/featuredStream.js';
 
 test('selects the local seeded preview only in demo mode', () => {
   const demo = { id: 'seeded-preview', title: 'Local simulation' };

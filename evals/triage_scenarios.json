@@ -1,0 +1,1207 @@
+{
+  "dataset_version": "1.0.0",
+  "description": "Synthetic, non-personal rule-triage evaluation cases.",
+  "scenario_count": 100,
+  "scenarios": [
+    {
+      "scenario_id": "explicit_help-001",
+      "category": "explicit_help",
+      "description": "explicit help synthetic case 1",
+      "input": {
+        "audio_transcript_snippet": "Help me now, someone is following me.",
+        "source": "button",
+        "local_hour": 1,
+        "risk_level": "standard"
+      },
+      "expected_threat_level": "CRITICAL"
+    },
+    {
+      "scenario_id": "explicit_help-002",
+      "category": "explicit_help",
+      "description": "explicit help synthetic case 2",
+      "input": {
+        "audio_transcript_snippet": "I am being attacked; please send help.",
+        "source": "button",
+        "local_hour": 9,
+        "risk_level": "standard"
+      },
+      "expected_threat_level": "CRITICAL"
+    },
+    {
+      "scenario_id": "explicit_help-003",
+      "category": "explicit_help",
+      "description": "explicit help synthetic case 3",
+      "input": {
+        "audio_transcript_snippet": "A person threatened me with a knife.",
+        "source": "button",
+        "local_hour": 17,
+        "risk_level": "elevated"
+      },
+      "expected_threat_level": "CRITICAL"
+    },
+    {
+      "scenario_id": "explicit_help-004",
+      "category": "explicit_help",
+      "description": "explicit help synthetic case 4",
+      "input": {
+        "audio_transcript_snippet": "I am trapped and cannot get away.",
+        "source": "button",
+        "local_hour": 23,
+        "risk_level": "standard"
+      },
+      "expected_threat_level": "CRITICAL"
+    },
+    {
+      "scenario_id": "explicit_help-005",
+      "category": "explicit_help",
+      "description": "explicit help synthetic case 5",
+      "input": {
+        "audio_transcript_snippet": "Someone is hurting me right now.",
+        "source": "button",
+        "local_hour": 1,
+        "risk_level": "standard"
+      },
+      "expected_threat_level": "CRITICAL"
+    },
+    {
+      "scenario_id": "explicit_help-006",
+      "category": "explicit_help",
+      "description": "explicit help synthetic case 6",
+      "input": {
+        "audio_transcript_snippet": "I am being followed and feel unsafe.",
+        "source": "button",
+        "local_hour": 9,
+        "risk_level": "standard"
+      },
+      "expected_threat_level": "CRITICAL"
+    },
+    {
+      "scenario_id": "explicit_help-007",
+      "category": "explicit_help",
+      "description": "explicit help synthetic case 7",
+      "input": {
+        "audio_transcript_snippet": "There is a weapon here; call for help.",
+        "source": "button",
+        "local_hour": 17,
+        "risk_level": "elevated"
+      },
+      "expected_threat_level": "CRITICAL"
+    },
+    {
+      "scenario_id": "explicit_help-008",
+      "category": "explicit_help",
+      "description": "explicit help synthetic case 8",
+      "input": {
+        "audio_transcript_snippet": "I was assaulted near the station.",
+        "source": "button",
+        "local_hour": 23,
+        "risk_level": "standard"
+      },
+      "expected_threat_level": "CRITICAL"
+    },
+    {
+      "scenario_id": "explicit_help-009",
+      "category": "explicit_help",
+      "description": "explicit help synthetic case 9",
+      "input": {
+        "audio_transcript_snippet": "They will not leave and I am scared.",
+        "source": "button",
+        "local_hour": 1,
+        "risk_level": "standard"
+      },
+      "expected_threat_level": "CRITICAL"
+    },
+    {
+      "scenario_id": "explicit_help-010",
+      "category": "explicit_help",
+      "description": "explicit help synthetic case 10",
+      "input": {
+        "audio_transcript_snippet": "Help, I cannot get away from them.",
+        "source": "button",
+        "local_hour": 9,
+        "risk_level": "standard"
+      },
+      "expected_threat_level": "CRITICAL"
+    },
+    {
+      "scenario_id": "explicit_help-011",
+      "category": "explicit_help",
+      "description": "explicit help synthetic case 11",
+      "input": {
+        "audio_transcript_snippet": "Someone threatened to hurt me tonight.",
+        "source": "button",
+        "local_hour": 17,
+        "risk_level": "elevated"
+      },
+      "expected_threat_level": "CRITICAL"
+    },
+    {
+      "scenario_id": "explicit_help-012",
+      "category": "explicit_help",
+      "description": "explicit help synthetic case 12",
+      "input": {
+        "audio_transcript_snippet": "I am trapped in the stairwell with them.",
+        "source": "button",
+        "local_hour": 23,
+        "risk_level": "standard"
+      },
+      "expected_threat_level": "CRITICAL"
+    },
+    {
+      "scenario_id": "explicit_help-013",
+      "category": "explicit_help",
+      "description": "explicit help synthetic case 13",
+      "input": {
+        "audio_transcript_snippet": "I am being harassed and followed home.",
+        "source": "button",
+        "local_hour": 1,
+        "risk_level": "standard"
+      },
+      "expected_threat_level": "CRITICAL"
+    },
+    {
+      "scenario_id": "explicit_help-014",
+      "category": "explicit_help",
+      "description": "explicit help synthetic case 14",
+      "input": {
+        "audio_transcript_snippet": "Please help me now; I am in danger.",
+        "source": "button",
+        "local_hour": 9,
+        "risk_level": "standard"
+      },
+      "expected_threat_level": "CRITICAL"
+    },
+    {
+      "scenario_id": "explicit_help-015",
+      "category": "explicit_help",
+      "description": "explicit help synthetic case 15",
+      "input": {
+        "audio_transcript_snippet": "An attacker is outside and will not leave.",
+        "source": "button",
+        "local_hour": 17,
+        "risk_level": "elevated"
+      },
+      "expected_threat_level": "CRITICAL"
+    },
+    {
+      "scenario_id": "explicit_help-016",
+      "category": "explicit_help",
+      "description": "explicit help synthetic case 16",
+      "input": {
+        "audio_transcript_snippet": "I am scared, they have a gun.",
+        "source": "button",
+        "local_hour": 23,
+        "risk_level": "standard"
+      },
+      "expected_threat_level": "CRITICAL"
+    },
+    {
+      "scenario_id": "explicit_help-017",
+      "category": "explicit_help",
+      "description": "explicit help synthetic case 17",
+      "input": {
+        "audio_transcript_snippet": "Someone is stalking me and is here now.",
+        "source": "button",
+        "local_hour": 1,
+        "risk_level": "standard"
+      },
+      "expected_threat_level": "CRITICAL"
+    },
+    {
+      "scenario_id": "explicit_help-018",
+      "category": "explicit_help",
+      "description": "explicit help synthetic case 18",
+      "input": {
+        "audio_transcript_snippet": "I am being hurt; this is an emergency.",
+        "source": "button",
+        "local_hour": 9,
+        "risk_level": "standard"
+      },
+      "expected_threat_level": "CRITICAL"
+    },
+    {
+      "scenario_id": "explicit_help-019",
+      "category": "explicit_help",
+      "description": "explicit help synthetic case 19",
+      "input": {
+        "audio_transcript_snippet": "I cannot leave and need someone immediately.",
+        "source": "button",
+        "local_hour": 17,
+        "risk_level": "elevated"
+      },
+      "expected_threat_level": "CRITICAL"
+    },
+    {
+      "scenario_id": "explicit_help-020",
+      "category": "explicit_help",
+      "description": "explicit help synthetic case 20",
+      "input": {
+        "audio_transcript_snippet": "They are following me and I need help now.",
+        "source": "button",
+        "local_hour": 23,
+        "risk_level": "standard"
+      },
+      "expected_threat_level": "CRITICAL"
+    },
+    {
+      "scenario_id": "missed_checkin-001",
+      "category": "missed_checkin",
+      "description": "missed checkin synthetic case 1",
+      "input": {
+        "audio_transcript_snippet": "",
+        "source": "safe_walk_timeout",
+        "local_hour": 1,
+        "risk_level": "standard"
+      },
+      "expected_threat_level": "ELEVATED"
+    },
+    {
+      "scenario_id": "missed_checkin-002",
+      "category": "missed_checkin",
+      "description": "missed checkin synthetic case 2",
+      "input": {
+        "audio_transcript_snippet": "",
+        "source": "safe_walk_timeout",
+        "local_hour": 9,
+        "risk_level": "standard"
+      },
+      "expected_threat_level": "ELEVATED"
+    },
+    {
+      "scenario_id": "missed_checkin-003",
+      "category": "missed_checkin",
+      "description": "missed checkin synthetic case 3",
+      "input": {
+        "audio_transcript_snippet": "",
+        "source": "safe_walk_timeout",
+        "local_hour": 17,
+        "risk_level": "elevated"
+      },
+      "expected_threat_level": "ELEVATED"
+    },
+    {
+      "scenario_id": "missed_checkin-004",
+      "category": "missed_checkin",
+      "description": "missed checkin synthetic case 4",
+      "input": {
+        "audio_transcript_snippet": "",
+        "source": "safe_walk_timeout",
+        "local_hour": 23,
+        "risk_level": "standard"
+      },
+      "expected_threat_level": "ELEVATED"
+    },
+    {
+      "scenario_id": "missed_checkin-005",
+      "category": "missed_checkin",
+      "description": "missed checkin synthetic case 5",
+      "input": {
+        "audio_transcript_snippet": "",
+        "source": "safe_walk_timeout",
+        "local_hour": 1,
+        "risk_level": "standard"
+      },
+      "expected_threat_level": "ELEVATED"
+    },
+    {
+      "scenario_id": "missed_checkin-006",
+      "category": "missed_checkin",
+      "description": "missed checkin synthetic case 6",
+      "input": {
+        "audio_transcript_snippet": "",
+        "source": "safe_walk_timeout",
+        "local_hour": 9,
+        "risk_level": "standard"
+      },
+      "expected_threat_level": "ELEVATED"
+    },
+    {
+      "scenario_id": "missed_checkin-007",
+      "category": "missed_checkin",
+      "description": "missed checkin synthetic case 7",
+      "input": {
+        "audio_transcript_snippet": "",
+        "source": "safe_walk_timeout",
+        "local_hour": 17,
+        "risk_level": "elevated"
+      },
+      "expected_threat_level": "ELEVATED"
+    },
+    {
+      "scenario_id": "missed_checkin-008",
+      "category": "missed_checkin",
+      "description": "missed checkin synthetic case 8",
+      "input": {
+        "audio_transcript_snippet": "",
+        "source": "safe_walk_timeout",
+        "local_hour": 23,
+        "risk_level": "standard"
+      },
+      "expected_threat_level": "ELEVATED"
+    },
+    {
+      "scenario_id": "missed_checkin-009",
+      "category": "missed_checkin",
+      "description": "missed checkin synthetic case 9",
+      "input": {
+        "audio_transcript_snippet": "",
+        "source": "safe_walk_timeout",
+        "local_hour": 1,
+        "risk_level": "standard"
+      },
+      "expected_threat_level": "ELEVATED"
+    },
+    {
+      "scenario_id": "missed_checkin-010",
+      "category": "missed_checkin",
+      "description": "missed checkin synthetic case 10",
+      "input": {
+        "audio_transcript_snippet": "",
+        "source": "safe_walk_timeout",
+        "local_hour": 9,
+        "risk_level": "standard"
+      },
+      "expected_threat_level": "ELEVATED"
+    },
+    {
+      "scenario_id": "missed_checkin-011",
+      "category": "missed_checkin",
+      "description": "missed checkin synthetic case 11",
+      "input": {
+        "audio_transcript_snippet": "",
+        "source": "safe_walk_timeout",
+        "local_hour": 17,
+        "risk_level": "elevated"
+      },
+      "expected_threat_level": "ELEVATED"
+    },
+    {
+      "scenario_id": "missed_checkin-012",
+      "category": "missed_checkin",
+      "description": "missed checkin synthetic case 12",
+      "input": {
+        "audio_transcript_snippet": "",
+        "source": "safe_walk_timeout",
+        "local_hour": 23,
+        "risk_level": "standard"
+      },
+      "expected_threat_level": "ELEVATED"
+    },
+    {
+      "scenario_id": "missed_checkin-013",
+      "category": "missed_checkin",
+      "description": "missed checkin synthetic case 13",
+      "input": {
+        "audio_transcript_snippet": "",
+        "source": "safe_walk_timeout",
+        "local_hour": 1,
+        "risk_level": "standard"
+      },
+      "expected_threat_level": "ELEVATED"
+    },
+    {
+      "scenario_id": "missed_checkin-014",
+      "category": "missed_checkin",
+      "description": "missed checkin synthetic case 14",
+      "input": {
+        "audio_transcript_snippet": "",
+        "source": "safe_walk_timeout",
+        "local_hour": 9,
+        "risk_level": "standard"
+      },
+      "expected_threat_level": "ELEVATED"
+    },
+    {
+      "scenario_id": "missed_checkin-015",
+      "category": "missed_checkin",
+      "description": "missed checkin synthetic case 15",
+      "input": {
+        "audio_transcript_snippet": "",
+        "source": "safe_walk_timeout",
+        "local_hour": 17,
+        "risk_level": "elevated"
+      },
+      "expected_threat_level": "ELEVATED"
+    },
+    {
+      "scenario_id": "missed_checkin-016",
+      "category": "missed_checkin",
+      "description": "missed checkin synthetic case 16",
+      "input": {
+        "audio_transcript_snippet": "",
+        "source": "safe_walk_timeout",
+        "local_hour": 23,
+        "risk_level": "standard"
+      },
+      "expected_threat_level": "ELEVATED"
+    },
+    {
+      "scenario_id": "missed_checkin-017",
+      "category": "missed_checkin",
+      "description": "missed checkin synthetic case 17",
+      "input": {
+        "audio_transcript_snippet": "",
+        "source": "safe_walk_timeout",
+        "local_hour": 1,
+        "risk_level": "standard"
+      },
+      "expected_threat_level": "ELEVATED"
+    },
+    {
+      "scenario_id": "missed_checkin-018",
+      "category": "missed_checkin",
+      "description": "missed checkin synthetic case 18",
+      "input": {
+        "audio_transcript_snippet": "",
+        "source": "safe_walk_timeout",
+        "local_hour": 9,
+        "risk_level": "standard"
+      },
+      "expected_threat_level": "ELEVATED"
+    },
+    {
+      "scenario_id": "missed_checkin-019",
+      "category": "missed_checkin",
+      "description": "missed checkin synthetic case 19",
+      "input": {
+        "audio_transcript_snippet": "",
+        "source": "safe_walk_timeout",
+        "local_hour": 17,
+        "risk_level": "elevated"
+      },
+      "expected_threat_level": "ELEVATED"
+    },
+    {
+      "scenario_id": "missed_checkin-020",
+      "category": "missed_checkin",
+      "description": "missed checkin synthetic case 20",
+      "input": {
+        "audio_transcript_snippet": "",
+        "source": "safe_walk_timeout",
+        "local_hour": 23,
+        "risk_level": "standard"
+      },
+      "expected_threat_level": "ELEVATED"
+    },
+    {
+      "scenario_id": "ambiguous-001",
+      "category": "ambiguous",
+      "description": "ambiguous synthetic case 1",
+      "input": {
+        "audio_transcript_snippet": "It is a quiet walk and I am checking in.",
+        "source": "chat",
+        "local_hour": 1,
+        "risk_level": "standard"
+      },
+      "expected_threat_level": "LOW"
+    },
+    {
+      "scenario_id": "ambiguous-002",
+      "category": "ambiguous",
+      "description": "ambiguous synthetic case 2",
+      "input": {
+        "audio_transcript_snippet": "I feel a little uncomfortable in this crowd.",
+        "source": "chat",
+        "local_hour": 9,
+        "risk_level": "standard"
+      },
+      "expected_threat_level": "LOW"
+    },
+    {
+      "scenario_id": "ambiguous-003",
+      "category": "ambiguous",
+      "description": "ambiguous synthetic case 3",
+      "input": {
+        "audio_transcript_snippet": "I might be lost; can someone confirm the route?",
+        "source": "chat",
+        "local_hour": 17,
+        "risk_level": "elevated"
+      },
+      "expected_threat_level": "LOW"
+    },
+    {
+      "scenario_id": "ambiguous-004",
+      "category": "ambiguous",
+      "description": "ambiguous synthetic case 4",
+      "input": {
+        "audio_transcript_snippet": "The street is unfamiliar but I am okay.",
+        "source": "chat",
+        "local_hour": 23,
+        "risk_level": "standard"
+      },
+      "expected_threat_level": "LOW"
+    },
+    {
+      "scenario_id": "ambiguous-005",
+      "category": "ambiguous",
+      "description": "ambiguous synthetic case 5",
+      "input": {
+        "audio_transcript_snippet": "I am concerned about the weather, not in danger.",
+        "source": "chat",
+        "local_hour": 1,
+        "risk_level": "standard"
+      },
+      "expected_threat_level": "LOW"
+    },
+    {
+      "scenario_id": "ambiguous-006",
+      "category": "ambiguous",
+      "description": "ambiguous synthetic case 6",
+      "input": {
+        "audio_transcript_snippet": "Could someone stay online while I walk?",
+        "source": "chat",
+        "local_hour": 9,
+        "risk_level": "standard"
+      },
+      "expected_threat_level": "LOW"
+    },
+    {
+      "scenario_id": "ambiguous-007",
+      "category": "ambiguous",
+      "description": "ambiguous synthetic case 7",
+      "input": {
+        "audio_transcript_snippet": "This area feels strange, but I have a safe route.",
+        "source": "chat",
+        "local_hour": 17,
+        "risk_level": "elevated"
+      },
+      "expected_threat_level": "LOW"
+    },
+    {
+      "scenario_id": "ambiguous-008",
+      "category": "ambiguous",
+      "description": "ambiguous synthetic case 8",
+      "input": {
+        "audio_transcript_snippet": "I am alone and would like a quick check-in.",
+        "source": "chat",
+        "local_hour": 23,
+        "risk_level": "standard"
+      },
+      "expected_threat_level": "LOW"
+    },
+    {
+      "scenario_id": "ambiguous-009",
+      "category": "ambiguous",
+      "description": "ambiguous synthetic case 9",
+      "input": {
+        "audio_transcript_snippet": "I heard a noise and feel uncertain.",
+        "source": "chat",
+        "local_hour": 1,
+        "risk_level": "standard"
+      },
+      "expected_threat_level": "LOW"
+    },
+    {
+      "scenario_id": "ambiguous-010",
+      "category": "ambiguous",
+      "description": "ambiguous synthetic case 10",
+      "input": {
+        "audio_transcript_snippet": "Everything is okay; I am just checking the app.",
+        "source": "chat",
+        "local_hour": 9,
+        "risk_level": "standard"
+      },
+      "expected_threat_level": "LOW"
+    },
+    {
+      "scenario_id": "ambiguous-011",
+      "category": "ambiguous",
+      "description": "ambiguous synthetic case 11",
+      "input": {
+        "audio_transcript_snippet": "The bus is late and I am waiting at the stop.",
+        "source": "chat",
+        "local_hour": 17,
+        "risk_level": "elevated"
+      },
+      "expected_threat_level": "LOW"
+    },
+    {
+      "scenario_id": "ambiguous-012",
+      "category": "ambiguous",
+      "description": "ambiguous synthetic case 12",
+      "input": {
+        "audio_transcript_snippet": "I am uncomfortable with how crowded this is.",
+        "source": "chat",
+        "local_hour": 23,
+        "risk_level": "standard"
+      },
+      "expected_threat_level": "LOW"
+    },
+    {
+      "scenario_id": "ambiguous-013",
+      "category": "ambiguous",
+      "description": "ambiguous synthetic case 13",
+      "input": {
+        "audio_transcript_snippet": "Can a guardian confirm this entrance is open?",
+        "source": "chat",
+        "local_hour": 1,
+        "risk_level": "standard"
+      },
+      "expected_threat_level": "LOW"
+    },
+    {
+      "scenario_id": "ambiguous-014",
+      "category": "ambiguous",
+      "description": "ambiguous synthetic case 14",
+      "input": {
+        "audio_transcript_snippet": "I am taking a different route home tonight.",
+        "source": "chat",
+        "local_hour": 9,
+        "risk_level": "standard"
+      },
+      "expected_threat_level": "LOW"
+    },
+    {
+      "scenario_id": "ambiguous-015",
+      "category": "ambiguous",
+      "description": "ambiguous synthetic case 15",
+      "input": {
+        "audio_transcript_snippet": "I feel uneasy, but there is no immediate problem.",
+        "source": "chat",
+        "local_hour": 17,
+        "risk_level": "elevated"
+      },
+      "expected_threat_level": "LOW"
+    },
+    {
+      "scenario_id": "ambiguous-016",
+      "category": "ambiguous",
+      "description": "ambiguous synthetic case 16",
+      "input": {
+        "audio_transcript_snippet": "My phone battery is low; I am still safe.",
+        "source": "chat",
+        "local_hour": 23,
+        "risk_level": "standard"
+      },
+      "expected_threat_level": "LOW"
+    },
+    {
+      "scenario_id": "ambiguous-017",
+      "category": "ambiguous",
+      "description": "ambiguous synthetic case 17",
+      "input": {
+        "audio_transcript_snippet": "I am concerned that I missed my usual bus.",
+        "source": "chat",
+        "local_hour": 1,
+        "risk_level": "standard"
+      },
+      "expected_threat_level": "LOW"
+    },
+    {
+      "scenario_id": "ambiguous-018",
+      "category": "ambiguous",
+      "description": "ambiguous synthetic case 18",
+      "input": {
+        "audio_transcript_snippet": "Please keep the check-in reminder active.",
+        "source": "chat",
+        "local_hour": 9,
+        "risk_level": "standard"
+      },
+      "expected_threat_level": "LOW"
+    },
+    {
+      "scenario_id": "ambiguous-019",
+      "category": "ambiguous",
+      "description": "ambiguous synthetic case 19",
+      "input": {
+        "audio_transcript_snippet": "I am alone at the station and waiting for my ride.",
+        "source": "chat",
+        "local_hour": 17,
+        "risk_level": "elevated"
+      },
+      "expected_threat_level": "LOW"
+    },
+    {
+      "scenario_id": "ambiguous-020",
+      "category": "ambiguous",
+      "description": "ambiguous synthetic case 20",
+      "input": {
+        "audio_transcript_snippet": "The path is dark; I am walking with a friend.",
+        "source": "chat",
+        "local_hour": 23,
+        "risk_level": "standard"
+      },
+      "expected_threat_level": "LOW"
+    },
+    {
+      "scenario_id": "false_alarm-001",
+      "category": "false_alarm",
+      "description": "false alarm synthetic case 1",
+      "input": {
+        "audio_transcript_snippet": "I pressed the button by mistake; I am safe.",
+        "source": "button",
+        "local_hour": 1,
+        "risk_level": "standard"
+      },
+      "expected_threat_level": "LOW"
+    },
+    {
+      "scenario_id": "false_alarm-002",
+      "category": "false_alarm",
+      "description": "false alarm synthetic case 2",
+      "input": {
+        "audio_transcript_snippet": "False alarm, please close this test alert.",
+        "source": "button",
+        "local_hour": 9,
+        "risk_level": "standard"
+      },
+      "expected_threat_level": "LOW"
+    },
+    {
+      "scenario_id": "false_alarm-003",
+      "category": "false_alarm",
+      "description": "false alarm synthetic case 3",
+      "input": {
+        "audio_transcript_snippet": "I was testing the screen; no assistance needed.",
+        "source": "button",
+        "local_hour": 17,
+        "risk_level": "elevated"
+      },
+      "expected_threat_level": "LOW"
+    },
+    {
+      "scenario_id": "false_alarm-004",
+      "category": "false_alarm",
+      "description": "false alarm synthetic case 4",
+      "input": {
+        "audio_transcript_snippet": "I am safe and the trigger was accidental.",
+        "source": "button",
+        "local_hour": 23,
+        "risk_level": "standard"
+      },
+      "expected_threat_level": "LOW"
+    },
+    {
+      "scenario_id": "false_alarm-005",
+      "category": "false_alarm",
+      "description": "false alarm synthetic case 5",
+      "input": {
+        "audio_transcript_snippet": "Cancel this practice activation, everything is fine.",
+        "source": "button",
+        "local_hour": 1,
+        "risk_level": "standard"
+      },
+      "expected_threat_level": "LOW"
+    },
+    {
+      "scenario_id": "false_alarm-006",
+      "category": "false_alarm",
+      "description": "false alarm synthetic case 6",
+      "input": {
+        "audio_transcript_snippet": "This was an accidental tap during setup.",
+        "source": "button",
+        "local_hour": 9,
+        "risk_level": "standard"
+      },
+      "expected_threat_level": "LOW"
+    },
+    {
+      "scenario_id": "false_alarm-007",
+      "category": "false_alarm",
+      "description": "false alarm synthetic case 7",
+      "input": {
+        "audio_transcript_snippet": "No emergency; I only wanted to inspect the button.",
+        "source": "button",
+        "local_hour": 17,
+        "risk_level": "elevated"
+      },
+      "expected_threat_level": "LOW"
+    },
+    {
+      "scenario_id": "false_alarm-008",
+      "category": "false_alarm",
+      "description": "false alarm synthetic case 8",
+      "input": {
+        "audio_transcript_snippet": "I am okay and this alert is not needed.",
+        "source": "button",
+        "local_hour": 23,
+        "risk_level": "standard"
+      },
+      "expected_threat_level": "LOW"
+    },
+    {
+      "scenario_id": "false_alarm-009",
+      "category": "false_alarm",
+      "description": "false alarm synthetic case 9",
+      "input": {
+        "audio_transcript_snippet": "The screen registered my touch while I was navigating.",
+        "source": "button",
+        "local_hour": 1,
+        "risk_level": "standard"
+      },
+      "expected_threat_level": "LOW"
+    },
+    {
+      "scenario_id": "false_alarm-010",
+      "category": "false_alarm",
+      "description": "false alarm synthetic case 10",
+      "input": {
+        "audio_transcript_snippet": "I do not need help, this is a test.",
+        "source": "button",
+        "local_hour": 9,
+        "risk_level": "standard"
+      },
+      "expected_threat_level": "LOW"
+    },
+    {
+      "scenario_id": "false_alarm-011",
+      "category": "false_alarm",
+      "description": "false alarm synthetic case 11",
+      "input": {
+        "audio_transcript_snippet": "Please mark this as a drill; I am at home.",
+        "source": "button",
+        "local_hour": 17,
+        "risk_level": "elevated"
+      },
+      "expected_threat_level": "LOW"
+    },
+    {
+      "scenario_id": "false_alarm-012",
+      "category": "false_alarm",
+      "description": "false alarm synthetic case 12",
+      "input": {
+        "audio_transcript_snippet": "I accidentally started the demo flow.",
+        "source": "button",
+        "local_hour": 23,
+        "risk_level": "standard"
+      },
+      "expected_threat_level": "LOW"
+    },
+    {
+      "scenario_id": "false_alarm-013",
+      "category": "false_alarm",
+      "description": "false alarm synthetic case 13",
+      "input": {
+        "audio_transcript_snippet": "I am safe, please cancel the practice incident.",
+        "source": "button",
+        "local_hour": 1,
+        "risk_level": "standard"
+      },
+      "expected_threat_level": "LOW"
+    },
+    {
+      "scenario_id": "false_alarm-014",
+      "category": "false_alarm",
+      "description": "false alarm synthetic case 14",
+      "input": {
+        "audio_transcript_snippet": "This is not an emergency; the button was tapped accidentally.",
+        "source": "button",
+        "local_hour": 9,
+        "risk_level": "standard"
+      },
+      "expected_threat_level": "LOW"
+    },
+    {
+      "scenario_id": "false_alarm-015",
+      "category": "false_alarm",
+      "description": "false alarm synthetic case 15",
+      "input": {
+        "audio_transcript_snippet": "I am fine and no one needs to respond.",
+        "source": "button",
+        "local_hour": 17,
+        "risk_level": "elevated"
+      },
+      "expected_threat_level": "LOW"
+    },
+    {
+      "scenario_id": "false_alarm-016",
+      "category": "false_alarm",
+      "description": "false alarm synthetic case 16",
+      "input": {
+        "audio_transcript_snippet": "Cancel the test alert, I am safe.",
+        "source": "button",
+        "local_hour": 23,
+        "risk_level": "standard"
+      },
+      "expected_threat_level": "LOW"
+    },
+    {
+      "scenario_id": "false_alarm-017",
+      "category": "false_alarm",
+      "description": "false alarm synthetic case 17",
+      "input": {
+        "audio_transcript_snippet": "I pressed SOS while exploring the interface.",
+        "source": "button",
+        "local_hour": 1,
+        "risk_level": "standard"
+      },
+      "expected_threat_level": "LOW"
+    },
+    {
+      "scenario_id": "false_alarm-018",
+      "category": "false_alarm",
+      "description": "false alarm synthetic case 18",
+      "input": {
+        "audio_transcript_snippet": "This is a routine test with no danger.",
+        "source": "button",
+        "local_hour": 9,
+        "risk_level": "standard"
+      },
+      "expected_threat_level": "LOW"
+    },
+    {
+      "scenario_id": "false_alarm-019",
+      "category": "false_alarm",
+      "description": "false alarm synthetic case 19",
+      "input": {
+        "audio_transcript_snippet": "No assistance required; I am ending the demo.",
+        "source": "button",
+        "local_hour": 17,
+        "risk_level": "elevated"
+      },
+      "expected_threat_level": "LOW"
+    },
+    {
+      "scenario_id": "false_alarm-020",
+      "category": "false_alarm",
+      "description": "false alarm synthetic case 20",
+      "input": {
+        "audio_transcript_snippet": "I am safe; that was an accidental activation.",
+        "source": "button",
+        "local_hour": 23,
+        "risk_level": "standard"
+      },
+      "expected_threat_level": "LOW"
+    },
+    {
+      "scenario_id": "quiet_duress-001",
+      "category": "quiet_duress",
+      "description": "quiet duress synthetic case 1",
+      "input": {
+        "audio_transcript_snippet": "",
+        "source": "duress_pin",
+        "local_hour": 1,
+        "risk_level": "high"
+      },
+      "expected_threat_level": "CRITICAL"
+    },
+    {
+      "scenario_id": "quiet_duress-002",
+      "category": "quiet_duress",
+      "description": "quiet duress synthetic case 2",
+      "input": {
+        "audio_transcript_snippet": "",
+        "source": "duress_pin",
+        "local_hour": 9,
+        "risk_level": "high"
+      },
+      "expected_threat_level": "CRITICAL"
+    },
+    {
+      "scenario_id": "quiet_duress-003",
+      "category": "quiet_duress",
+      "description": "quiet duress synthetic case 3",
+      "input": {
+        "audio_transcript_snippet": "",
+        "source": "duress_pin",
+        "local_hour": 17,
+        "risk_level": "elevated"
+      },
+      "expected_threat_level": "CRITICAL"
+    },
+    {
+      "scenario_id": "quiet_duress-004",
+      "category": "quiet_duress",
+      "description": "quiet duress synthetic case 4",
+      "input": {
+        "audio_transcript_snippet": "",
+        "source": "duress_pin",
+        "local_hour": 23,
+        "risk_level": "high"
+      },
+      "expected_threat_level": "CRITICAL"
+    },
+    {
+      "scenario_id": "quiet_duress-005",
+      "category": "quiet_duress",
+      "description": "quiet duress synthetic case 5",
+      "input": {
+        "audio_transcript_snippet": "",
+        "source": "duress_pin",
+        "local_hour": 1,
+        "risk_level": "high"
+      },
+      "expected_threat_level": "CRITICAL"
+    },
+    {
+      "scenario_id": "quiet_duress-006",
+      "category": "quiet_duress",
+      "description": "quiet duress synthetic case 6",
+      "input": {
+        "audio_transcript_snippet": "",
+        "source": "duress_pin",
+        "local_hour": 9,
+        "risk_level": "high"
+      },
+      "expected_threat_level": "CRITICAL"
+    },
+    {
+      "scenario_id": "quiet_duress-007",
+      "category": "quiet_duress",
+      "description": "quiet duress synthetic case 7",
+      "input": {
+        "audio_transcript_snippet": "",
+        "source": "duress_pin",
+        "local_hour": 17,
+        "risk_level": "elevated"
+      },
+      "expected_threat_level": "CRITICAL"
+    },
+    {
+      "scenario_id": "quiet_duress-008",
+      "category": "quiet_duress",
+      "description": "quiet duress synthetic case 8",
+      "input": {
+        "audio_transcript_snippet": "",
+        "source": "duress_pin",
+        "local_hour": 23,
+        "risk_level": "high"
+      },
+      "expected_threat_level": "CRITICAL"
+    },
+    {
+      "scenario_id": "quiet_duress-009",
+      "category": "quiet_duress",
+      "description": "quiet duress synthetic case 9",
+      "input": {
+        "audio_transcript_snippet": "",
+        "source": "duress_pin",
+        "local_hour": 1,
+        "risk_level": "high"
+      },
+      "expected_threat_level": "CRITICAL"
+    },
+    {
+      "scenario_id": "quiet_duress-010",
+      "category": "quiet_duress",
+      "description": "quiet duress synthetic case 10",
+      "input": {
+        "audio_transcript_snippet": "",
+        "source": "duress_pin",
+        "local_hour": 9,
+        "risk_level": "high"
+      },
+      "expected_threat_level": "CRITICAL"
+    },
+    {
+      "scenario_id": "quiet_duress-011",
+      "category": "quiet_duress",
+      "description": "quiet duress synthetic case 11",
+      "input": {
+        "audio_transcript_snippet": "",
+        "source": "duress_pin",
+        "local_hour": 17,
+        "risk_level": "elevated"
+      },
+      "expected_threat_level": "CRITICAL"
+    },
+    {
+      "scenario_id": "quiet_duress-012",
+      "category": "quiet_duress",
+      "description": "quiet duress synthetic case 12",
+      "input": {
+        "audio_transcript_snippet": "",
+        "source": "duress_pin",
+        "local_hour": 23,
+        "risk_level": "high"
+      },
+      "expected_threat_level": "CRITICAL"
+    },
+    {
+      "scenario_id": "quiet_duress-013",
+      "category": "quiet_duress",
+      "description": "quiet duress synthetic case 13",
+      "input": {
+        "audio_transcript_snippet": "",
+        "source": "duress_pin",
+        "local_hour": 1,
+        "risk_level": "high"
+      },
+      "expected_threat_level": "CRITICAL"
+    },
+    {
+      "scenario_id": "quiet_duress-014",
+      "category": "quiet_duress",
+      "description": "quiet duress synthetic case 14",
+      "input": {
+        "audio_transcript_snippet": "",
+        "source": "duress_pin",
+        "local_hour": 9,
+        "risk_level": "high"
+      },
+      "expected_threat_level": "CRITICAL"
+    },
+    {
+      "scenario_id": "quiet_duress-015",
+      "category": "quiet_duress",
+      "description": "quiet duress synthetic case 15",
+      "input": {
+        "audio_transcript_snippet": "",
+        "source": "duress_pin",
+        "local_hour": 17,
+        "risk_level": "elevated"
+      },
+      "expected_threat_level": "CRITICAL"
+    },
+    {
+      "scenario_id": "quiet_duress-016",
+      "category": "quiet_duress",
+      "description": "quiet duress synthetic case 16",
+      "input": {
+        "audio_transcript_snippet": "",
+        "source": "duress_pin",
+        "local_hour": 23,
+        "risk_level": "high"
+      },
+      "expected_threat_level": "CRITICAL"
+    },
+    {
+      "scenario_id": "quiet_duress-017",
+      "category": "quiet_duress",
+      "description": "quiet duress synthetic case 17",
+      "input": {
+        "audio_transcript_snippet": "",
+        "source": "duress_pin",
+        "local_hour": 1,
+        "risk_level": "high"
+      },
+      "expected_threat_level": "CRITICAL"
+    },
+    {
+      "scenario_id": "quiet_duress-018",
+      "category": "quiet_duress",
+      "description": "quiet duress synthetic case 18",
+      "input": {
+        "audio_transcript_snippet": "",
+        "source": "duress_pin",
+        "local_hour": 9,
+        "risk_level": "high"
+      },
+      "expected_threat_level": "CRITICAL"
+    },
+    {
+      "scenario_id": "quiet_duress-019",
+      "category": "quiet_duress",
+      "description": "quiet duress synthetic case 19",
+      "input": {
+        "audio_transcript_snippet": "",
+        "source": "duress_pin",
+        "local_hour": 17,
+        "risk_level": "elevated"
+      },
+      "expected_threat_level": "CRITICAL"
+    },
+    {
+      "scenario_id": "quiet_duress-020",
+      "category": "quiet_duress",
+      "description": "quiet duress synthetic case 20",
+      "input": {
+        "audio_transcript_snippet": "",
+        "source": "duress_pin",
+        "local_hour": 23,
+        "risk_level": "high"
+      },
+      "expected_threat_level": "CRITICAL"
+    }
+  ]
+}

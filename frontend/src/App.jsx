@@ -24,7 +24,7 @@ import useLoudAlarm from './hooks/useLoudAlarm.js';
 import { DEMO_NETWORK, DEMO_STREAMS } from './demo/seedData.js';
 import { API_URL } from './config.js';
 import { submitSos } from './sosFlow.js';
-import { selectFeaturedStream } from './streamAccess.js';
+import { selectFeaturedStream } from './featuredStream.js';
 const DEMO_MODE = import.meta.env.VITE_DEMO_MODE === 'true';
 const ROUTES = ['home', 'walk', 'circle', 'community', 'privacy', 'evidence', 'activity'];
 const ROUTE_TITLES = { home: 'Right now', walk: 'Safe Walk', circle: 'My Circle', community: 'Community', privacy: 'Privacy', evidence: 'Evidence', activity: 'Activity' };

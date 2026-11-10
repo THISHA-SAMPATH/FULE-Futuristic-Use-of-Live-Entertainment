@@ -13,4 +13,4 @@ Process-local invite sessions do not survive restarts and cannot establish admin
 
 ## Consequences
 
-Production must provision a strong JWT secret and an initial admin account, protect refresh tokens, rate-limit auth endpoints, and define account recovery before public rollout. Twitch OAuth remains the separate streamer/Twitch API authorization channel.
+Production must provision a strong JWT secret and an initial admin account, protect refresh tokens, rate-limit auth endpoints, and define account recovery before public rollout.
