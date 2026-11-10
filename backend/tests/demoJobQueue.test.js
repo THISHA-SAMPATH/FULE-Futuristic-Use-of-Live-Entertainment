@@ -1,10 +1,46 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rm, utimes, writeFile } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { renameWithRetry, replaceQueueFile } from '../services/demoJobQueue.js';
+import { isLockOwnerAlive, renameWithRetry, replaceQueueFile } from '../services/demoJobQueue.js';
+
+test('queue lock owner check keeps live owners and recognizes dead owners', () => {
+  assert.equal(isLockOwnerAlive(`${process.pid}:live`), true);
+  assert.equal(isLockOwnerAlive('not-a-pid:invalid'), false);
+  assert.equal(isLockOwnerAlive('54321:dead', { killProcess: () => { const error = new Error('no process'); error.code = 'ESRCH'; throw error; } }), false);
+  assert.equal(isLockOwnerAlive('54321:protected', { killProcess: () => { const error = new Error('permission denied'); error.code = 'EPERM'; throw error; } }), true);
+});
+
+test('demo queue reclaims an old lock only after its owner process has exited', async () => {
+  const temporaryRoot = await mkdtemp(join(tmpdir(), 'fule-demo-jobs-stale-lock-'));
+  const directory = join(temporaryRoot, 'data');
+  const moduleUrl = new URL('../services/demoJobQueue.js', import.meta.url).href;
+  const lockPath = join(directory, 'demo-jobs.json.lock');
+  try {
+    await mkdir(directory, { recursive: true });
+    await writeFile(lockPath, '2147480000:abandoned-lock\n');
+    const staleTime = new Date(Date.now() - 60_000);
+    await utimes(lockPath, staleTime, staleTime);
+    const code = `const { demoJobQueue } = await import(${JSON.stringify(moduleUrl)}); await demoJobQueue.add('timeout', 'recovered:timeout:1', { walkId: 'recovered', checkinNumber: 1 }, 60000);`;
+    await new Promise((resolve, reject) => {
+      const child = spawn(process.execPath, ['--input-type=module', '-e', code], {
+        env: { ...process.env, DEMO_MODE: 'true', FULE_DATA_DIR: directory },
+        stdio: ['ignore', 'ignore', 'pipe']
+      });
+      let stderr = '';
+      child.stderr.setEncoding('utf8');
+      child.stderr.on('data', (chunk) => { stderr += chunk; });
+      child.once('error', reject);
+      child.once('exit', (codeValue) => codeValue === 0 ? resolve() : reject(new Error(`stale lock recovery exited ${codeValue}: ${stderr}`)));
+    });
+    const jobs = JSON.parse(await readFile(join(directory, 'demo-jobs.json'), 'utf8'));
+    assert.equal(jobs[0].id, 'recovered:timeout:1');
+  } finally {
+    await rm(temporaryRoot, { recursive: true, force: true });
+  }
+});
 
 test('demo queue retries transient Windows rename locks from file sync clients', async () => {
   let attempts = 0;

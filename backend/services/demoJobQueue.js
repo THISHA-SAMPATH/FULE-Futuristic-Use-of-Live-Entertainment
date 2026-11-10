@@ -12,6 +12,35 @@ let writes = Promise.resolve();
 
 const sleep = (delay) => new Promise((resolveDelay) => setTimeout(resolveDelay, delay));
 
+export function isLockOwnerAlive(owner, { killProcess = process.kill } = {}) {
+  const pid = Number.parseInt(String(owner).split(':', 1)[0], 10);
+  if (!Number.isSafeInteger(pid) || pid <= 0) return false;
+  try {
+    killProcess(pid, 0);
+    return true;
+  } catch (error) {
+    if (error.code === 'ESRCH') return false;
+    if (error.code === 'EPERM') return true;
+    throw error;
+  }
+}
+
+async function removeStaleLock() {
+  try {
+    const [metadata, owner] = await Promise.all([stat(lockPath), readFile(lockPath, 'utf8')]);
+    const ageMs = Date.now() - metadata.mtimeMs;
+    if (ageMs <= 30_000 || isLockOwnerAlive(owner)) return;
+
+    // Confirm the same lock is still present before unlinking it. A process
+    // may have released and reacquired the path while we checked the owner.
+    const [latestMetadata, latestOwner] = await Promise.all([stat(lockPath), readFile(lockPath, 'utf8')]);
+    if (metadata.ino !== latestMetadata.ino || owner !== latestOwner) return;
+    await unlink(lockPath);
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+  }
+}
+
 // Windows sync clients (including OneDrive) can briefly hold the destination
 // while scanning a replacement. Retry those sharing violations before failing
 // the durable queue update.
@@ -64,8 +93,11 @@ function readJobs() {
 async function withFileLock(operation) {
   mkdirSync(dirname(path), { recursive: true });
   const token = `${process.pid}:${randomUUID()}`;
-  const deadline = Date.now() + 15_000;
+  const timeoutMs = Math.max(1_000, Number(process.env.DEMO_QUEUE_LOCK_TIMEOUT_MS) || 60_000);
+  const deadline = Date.now() + timeoutMs;
   let handle;
+  let lastOwner = '';
+  let lastLockAgeMs = 0;
   while (!handle) {
     try {
       handle = await open(lockPath, 'wx', 0o600);
@@ -74,12 +106,18 @@ async function withFileLock(operation) {
       if (error.code !== 'EEXIST') throw error;
       try {
         const [metadata, owner] = await Promise.all([stat(lockPath), readFile(lockPath, 'utf8')]);
-        if (Date.now() - metadata.mtimeMs > 30_000 && owner === await readFile(lockPath, 'utf8')) await unlink(lockPath);
+        lastOwner = owner;
+        lastLockAgeMs = Math.max(0, Date.now() - metadata.mtimeMs);
       } catch (lockError) {
         if (lockError.code !== 'ENOENT') throw lockError;
       }
-      if (Date.now() >= deadline) throw new Error('Timed out waiting for the demo job queue file lock.');
-      await new Promise((resolveDelay) => setTimeout(resolveDelay, 20));
+      await removeStaleLock();
+      if (Date.now() >= deadline) {
+        const ownerPid = Number.parseInt(lastOwner.split(':', 1)[0], 10);
+        const ownerDetail = Number.isSafeInteger(ownerPid) ? ` Owner PID ${ownerPid}; lock age ${Math.ceil(lastLockAgeMs / 1000)}s.` : '';
+        throw new Error(`Timed out after ${timeoutMs}ms waiting for the demo job queue lock.${ownerDetail} Stop duplicate FULE dev servers if that PID is an old instance.`);
+      }
+      await new Promise((resolveDelay) => setTimeout(resolveDelay, 40));
     }
   }
   try {
