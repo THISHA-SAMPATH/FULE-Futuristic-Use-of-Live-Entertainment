@@ -92,7 +92,7 @@ The above setup instructions describe supported wiring. They are not proof that 
 
 ## Rule triage evaluation
 
-The development dataset is small, synthetic, and author-written. The old 30% test split was seen during prior analysis and is labeled “development test, previously seen”; it is not held out. **Only `holdout_v2` is held out.** Scores measure agreement with labels and do not validate real-world safety.
+The development dataset is small, synthetic, and author-written. The old 30% test split was seen during prior analysis and is labeled “development test, previously seen”; it is not held out. Scores measure agreement with labels and do not validate real-world safety. `holdout_v2` is an abandoned empty placeholder; `holdout_v3` is the current empty placeholder for future user-supplied scenarios.
 
 Base rates matter: the synthetic dataset intentionally over-represents dangerous and safety-related cases, so precision on it overstates likely real-world precision. Treat per-class false-positive rates and alert-load (the fraction classified ELEVATED or CRITICAL) as the main caution metrics, not accuracy or precision alone.
 
@@ -125,7 +125,7 @@ Set `FULE_TIERED_DELIVERY=true` to enable routing by severity; it defaults to of
 node evals/run-triage-eval.mjs
 ```
 
-Each scenario has `trigger_time_label` (the expected triage output when the incident is first raised) and `final_outcome` (`resolved`, `cancelled`, `false_alarm`, `escalated`, or `acknowledged`). The dev/test schema is `evals/triage_scenarios.schema.json`; the holdout schema is `evals/holdout_v2.schema.json`. The normal evaluator command above uses only development and previously seen test data. Do not run a holdout validator or holdout-scoring command during development; the protected holdout file must not be opened during development. The evaluator scores triage only against `trigger_time_label` and reports aggregate metrics. `evals/BASELINE.md` contains the before/after label report and grouped development errors; `evals/RELABEL_LOG.md` records every scenario's labels and rationale.
+Each scenario has `trigger_time_label` (the expected triage output when the incident is first raised) and `final_outcome` (`resolved`, `cancelled`, `false_alarm`, `escalated`, or `acknowledged`). The dev/test schema is `evals/triage_scenarios.schema.json`; versioned holdout schemas are `evals/holdout_v2.schema.json` and `evals/holdout_v3.schema.json`. The normal evaluator command above uses only development and previously seen test data. The v3 empty placeholder is ignored by Git; do not force-add it. Never open either holdout dataset during development. When a populated, user-supplied frozen dataset is authorized for evaluation, select it explicitly with `node evals/run-triage-eval.mjs --score-holdout=holdout_v3` (or the matching version). The evaluator scores only `trigger_time_label` and reports aggregate metrics. `evals/BASELINE.md` contains the before/after label report and grouped development errors; `evals/RELABEL_LOG.md` records every scenario's labels and rationale.
 
 The old development test split remains in `evals/triage_scenarios.json` for continuity, but it has already been seen during analysis and must not be presented as an independent holdout.
 

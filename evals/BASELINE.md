@@ -2,7 +2,7 @@
 
 - Dataset: small, synthetic, and author-written; development N=70.
 - The old 30% test split was seen during previous analysis; it is reported as “development test, previously seen” and is not an independent holdout.
-- Only holdout_v2 is held out. It was not read in this development-only run.
+- Optional versioned holdout evaluation runs only when explicitly named; this development-only run did not access any holdout file.
 - Scoring target: trigger_time_label only. final_outcome describes the eventual incident state and is not used in triage metrics.
 - The historical label-cleanup comparison isolates that label change. This run also includes a general negation-handling rule fix; its dev-only effect is reported separately below.
 
@@ -86,7 +86,7 @@ Cutoff 5 is the first tested point under 60% alert-load (55.7%); ELEVATED recall
 
 Grouped by cause after the negation fix; the remaining button-floor cases are handled separately by trigger_policy.
 
-- Button activation adds an urgency floor despite explicit cancellation or reassurance: 15
+- Button activation adds an urgency floor despite explicit cancellation or reassurance: 15; these are button-only raw-engine mismatches and are separated into trigger_policy.
 
 ## Earlier four development error groups (old labels, before negation fix)
 
@@ -95,7 +95,7 @@ Grouped by cause after the negation fix; the remaining button-floor cases are ha
 - Mild discomfort or ordinary travel concern triggers elevated wording: 2; those trigger labels were reviewed as ELEVATED.
 - Negated emergency wording still matches high-severity vocabulary: 2; retained LOW trigger labels.
 
-## holdout_v2
+## Optional holdout evaluation
 
 - Not accessed by this development-only run, per the repository rule.
 

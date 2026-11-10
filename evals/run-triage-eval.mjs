@@ -3,24 +3,30 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createRuleBasedTriage, scoreIncident } from '../backend/services/triageEngine.js';
 import { applyButtonTriggerFloor } from '../backend/services/deliveryPolicy.js';
-import { THREAT_LEVELS, validateHoldoutDocument, verifyHoldoutGitFreeze } from './holdoutValidation.mjs';
+import { THREAT_LEVELS, holdoutPathFor, validateHoldoutDocument, verifyHoldoutGitFreeze } from './holdoutValidation.mjs';
 
 const directory = dirname(fileURLToPath(import.meta.url));
 const root = resolve(directory, '..');
 const developmentPath = resolve(directory, 'triage_scenarios.json');
-const holdoutPath = resolve(directory, 'holdout_v2.json');
 const beforePath = resolve(directory, 'pre_relabel_metrics.json');
 const beforeSuitePath = resolve(directory, 'pre_tiered_suite_metrics.json');
 const outputPath = resolve(directory, 'BASELINE.md');
-const scoreHoldout = process.argv.includes('--score-holdout');
+const scoreArg = process.argv.find((arg) => arg.startsWith('--score-holdout='));
+const scoreFlagIndex = process.argv.indexOf('--score-holdout');
+const holdoutDatasetId = scoreArg?.slice('--score-holdout='.length)
+  || (scoreFlagIndex >= 0 ? process.argv[scoreFlagIndex + 1] : null);
+const scoreHoldout = Boolean(scoreArg || scoreFlagIndex >= 0);
+const holdoutRelativePath = holdoutDatasetId ? holdoutPathFor(holdoutDatasetId) : null;
+if (scoreHoldout && !holdoutRelativePath) throw new Error('Specify an explicit holdout dataset: --score-holdout=holdout_v2 or --score-holdout=holdout_v3. Default development evaluation never opens holdout files.');
+const holdoutPath = holdoutRelativePath ? resolve(directory, holdoutRelativePath.split('/').at(-1)) : null;
 const development = JSON.parse(await readFile(developmentPath, 'utf8'));
 let holdout = null;
-let holdoutFreeze = null;
 if (scoreHoldout) {
   holdout = JSON.parse(await readFile(holdoutPath, 'utf8'));
   const validation = validateHoldoutDocument(holdout);
-  if (!validation.valid) throw new Error(`Invalid holdout_v2: ${validation.errors.join('; ')}`);
-  holdoutFreeze = verifyHoldoutGitFreeze({ document: holdout, filePath: holdoutPath, cwd: root });
+  if (!validation.valid) throw new Error(`Invalid ${holdoutDatasetId}: ${validation.errors.join('; ')}`);
+  if (holdout.dataset_id !== holdoutDatasetId) throw new Error(`Requested ${holdoutDatasetId}, but dataset_id is ${holdout.dataset_id}.`);
+  verifyHoldoutGitFreeze({ document: holdout, filePath: holdoutPath, cwd: root });
 }
 const classes = THREAT_LEVELS;
 
@@ -96,7 +102,7 @@ const seenTestResult = evaluate(development.scenarios.filter(({ split }) => spli
 const devScenarios = development.scenarios.filter(({ split }) => split === 'dev');
 const judgmentCalls = development.scenarios.filter(({ judgment_call }) => judgment_call === true);
 const withoutJudgmentCalls = development.scenarios.filter(({ judgment_call }) => judgment_call !== true);
-// This branch runs only when explicitly requested; default development scoring never opens holdout_v2.json.
+// This branch runs only when an exact dataset version is explicitly requested; default development scoring opens no holdout file.
 const holdoutResult = scoreHoldout && !holdout.placeholder ? evaluate(holdout.scenarios, engine) : null;
 const patterns = new Map();
 for (const scenario of devResult.scored.filter(({ expected, predicted }) => expected !== predicted)) {
@@ -158,7 +164,7 @@ const lines = [
   '# Triage Evaluation: Trigger-Time Labels', '',
   '- Dataset: small, synthetic, and author-written; development N=70.',
   '- The old 30% test split was seen during previous analysis; it is reported as “development test, previously seen” and is not an independent holdout.',
-  '- Only holdout_v2 is held out. It was not read in this development-only run.',
+  '- Optional versioned holdout evaluation runs only when explicitly named; this development-only run did not access any holdout file.',
   '- Scoring target: trigger_time_label only. final_outcome describes the eventual incident state and is not used in triage metrics.',
   '- The historical label-cleanup comparison isolates that label change. This run also includes a general negation-handling rule fix; its dev-only effect is reported separately below.', '',
   '## Before / after relabel metrics', '',
@@ -202,8 +208,8 @@ const lines = [
   '- Button activation adds an urgency floor despite explicit cancellation or reassurance: 15; retained LOW trigger labels.',
   '- Mild discomfort or ordinary travel concern triggers elevated wording: 2; those trigger labels were reviewed as ELEVATED.',
   '- Negated emergency wording still matches high-severity vocabulary: 2; retained LOW trigger labels.', '',
-  '## holdout_v2', '',
-  ...(scoreHoldout ? holdoutResult ? [`- N=${holdoutResult.size}; aggregate metrics are included only when the holdout is populated and frozen.`] : ['- Pending: the holdout remains a placeholder or has no scenarios.'] : ['- Not accessed by this development-only run, per the repository rule.']), '',
+  `## ${scoreHoldout ? holdoutDatasetId : 'Optional holdout evaluation'}`, '',
+  ...(scoreHoldout ? holdoutResult ? [`- N=${holdoutResult.size}; aggregate metrics are included only when the holdout is populated and frozen.`] : ['- The selected holdout is a placeholder or has no scenarios.'] : ['- Not accessed by this development-only run, per the repository rule.']), '',
   '## Method and base-rate caution', '',
   'Each development/test scenario is scored against trigger_time_label. context_triage evaluates the raw deterministic engine on sources other than button/redeem; trigger_policy evaluates the separate active-button delivery floor. Precision and recall use one-vs-rest class counts; FPR is FP/(FP+TN); alert-load is predicted ELEVATED plus CRITICAL divided by N. The historical label-cleanup rows are pre-negation-change metrics; the separate dev-only negation table measures the later rule change. This synthetic, small, author-written dataset over-represents dangerous cases, so precision overstates likely real-world precision. FPR and alert-load are the main caution metrics.'
 ];

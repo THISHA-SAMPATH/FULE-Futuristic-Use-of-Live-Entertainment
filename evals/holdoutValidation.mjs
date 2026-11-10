@@ -6,12 +6,17 @@ export const THREAT_LEVELS = ['LOW', 'ELEVATED', 'CRITICAL'];
 const SOURCES = ['button', 'shake', 'keyboard', 'chat', 'redeem', 'duress_pin', 'safe_walk_timeout', 'safe_walk_duress'];
 const RISK_LEVELS = ['standard', 'elevated', 'high'];
 const FINAL_OUTCOMES = ['resolved', 'cancelled', 'false_alarm', 'escalated', 'acknowledged'];
+const HOLDOUT_PATHS = Object.freeze({ holdout_v2: 'evals/holdout_v2.json', holdout_v3: 'evals/holdout_v3.json' });
+
+export function holdoutPathFor(datasetId) {
+  return Object.hasOwn(HOLDOUT_PATHS, datasetId) ? HOLDOUT_PATHS[datasetId] : null;
+}
 
 export function validateHoldoutDocument(document) {
   const errors = [];
   const issue = (path, message) => errors.push(`${path}: ${message}`);
   if (!document || typeof document !== 'object' || Array.isArray(document)) return { valid: false, errors: ['$: expected an object'] };
-  if (document.dataset_id !== 'holdout_v2') issue('dataset_id', 'must equal holdout_v2');
+  if (!holdoutPathFor(document.dataset_id)) issue('dataset_id', `must be one of ${Object.keys(HOLDOUT_PATHS).join(', ')}`);
   if (document.schema_version !== '1.0.0') issue('schema_version', 'must equal 1.0.0');
   if (document.holdout !== true) issue('holdout', 'must be true');
   if (typeof document.placeholder !== 'boolean') issue('placeholder', 'must be boolean');
@@ -50,24 +55,28 @@ export function validateHoldoutDocument(document) {
   return { valid: errors.length === 0, errors };
 }
 
-export function verifyHoldoutGitFreeze({ document, filePath, relativePath = 'evals/holdout_v2.json', cwd, gitExec = execFileSync, readFile = readFileSync }) {
+export function verifyHoldoutGitFreeze({ document, filePath, relativePath, cwd, gitExec = execFileSync, readFile = readFileSync }) {
+  const expectedPath = holdoutPathFor(document?.dataset_id);
+  if (!expectedPath) throw new Error('Cannot verify holdout Git history for an unsupported dataset_id.');
+  const pathToFreeze = relativePath || expectedPath;
+  if (pathToFreeze !== expectedPath) throw new Error(`Git freeze path must match dataset_id (${expectedPath}).`);
   const runGit = (args) => gitExec('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
   let firstAdd;
   try {
-    firstAdd = runGit(['log', '--follow', '--diff-filter=A', '--format=%H', '--reverse', 'HEAD', '--', relativePath]).split(/\s+/).filter(Boolean)[0] || null;
+    firstAdd = runGit(['log', '--follow', '--diff-filter=A', '--format=%H', '--reverse', 'HEAD', '--', pathToFreeze]).split(/\s+/).filter(Boolean)[0] || null;
   } catch (error) {
     throw new Error(`Unable to verify the holdout Git history: ${error.message}`);
   }
   if (!firstAdd) {
     if (document.placeholder) return { tracked: false, immutable: false, baseline_commit: null };
-    throw new Error('holdout_v2 must be populated and committed as its first Git inclusion before it can be evaluated.');
+    throw new Error(`${document.dataset_id} must be populated and committed as its first Git inclusion before it can be evaluated.`);
   }
 
-  const history = runGit(['log', '--follow', '--format=%H', 'HEAD', '--', relativePath]).split(/\s+/).filter(Boolean);
-  if (history.length !== 1 || history[0] !== firstAdd) throw new Error('Refusing to evaluate holdout_v2: Git history shows a change after its first included commit.');
-  const committed = gitExec('git', ['show', `${firstAdd}:${relativePath}`], { cwd, encoding: 'buffer', stdio: ['ignore', 'pipe', 'pipe'] });
+  const history = runGit(['log', '--follow', '--format=%H', 'HEAD', '--', pathToFreeze]).split(/\s+/).filter(Boolean);
+  if (history.length !== 1 || history[0] !== firstAdd) throw new Error(`Refusing to evaluate ${document.dataset_id}: Git history shows a change after its first included commit.`);
+  const committed = gitExec('git', ['show', `${firstAdd}:${pathToFreeze}`], { cwd, encoding: 'buffer', stdio: ['ignore', 'pipe', 'pipe'] });
   const working = readFile(filePath);
   const digest = (value) => createHash('sha256').update(value).digest('hex');
-  if (digest(committed) !== digest(working)) throw new Error('Refusing to evaluate holdout_v2: working file differs from the first committed version.');
+  if (digest(committed) !== digest(working)) throw new Error(`Refusing to evaluate ${document.dataset_id}: working file differs from the first committed version.`);
   return { tracked: true, immutable: true, baseline_commit: firstAdd };
 }

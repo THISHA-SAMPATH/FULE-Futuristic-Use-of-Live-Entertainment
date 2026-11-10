@@ -9,3 +9,4 @@ backend/data/incidents.sqlite*
 **/.env
 dist/
 **/dist/
+evals/holdout_v3.json
