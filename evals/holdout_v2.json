@@ -1,0 +1,9 @@
+{
+  "dataset_id": "holdout_v2",
+  "schema_version": "1.0.0",
+  "holdout": true,
+  "placeholder": true,
+  "note": "PLACEHOLDER — user-supplied scenarios go here. Add the populated file in its first Git commit; evaluation refuses later changes.",
+  "scenario_count": 0,
+  "scenarios": []
+}

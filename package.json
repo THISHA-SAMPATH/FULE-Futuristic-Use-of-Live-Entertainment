@@ -9,10 +9,11 @@
     "dev:backend": "npm --prefix backend run dev",
     "dev:frontend": "npm --prefix frontend run dev",
     "start": "npm --prefix backend start",
-    "test": "npm --prefix backend test && npm --prefix frontend test",
+    "test": "npm --prefix backend test && npm --prefix frontend test && node --test evals/holdoutValidation.test.mjs",
     "build": "npm --prefix frontend run build",
     "load:test:baseline": "node load-tests/run-local-baseline.mjs",
-    "smoke:livekit": "node scripts/livekit-minio-smoke.mjs"
+    "smoke:livekit": "node scripts/livekit-minio-smoke.mjs",
+    "eval:validate-holdout": "node evals/validate-holdout.mjs"
   },
   "devDependencies": {
     "concurrently": "^9.1.2"

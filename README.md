@@ -92,15 +92,16 @@ The above setup instructions describe supported wiring. They are not proof that 
 
 ## Rule triage evaluation
 
-The current rules are evaluated against a small, synthetic, author-written dataset; these scores measure agreement with its labels and are not real-world safety validation.
+The development dataset is small, synthetic, and author-written. The old 30% test split was seen during prior analysis and is labeled “development test, previously seen”; it is not held out. **Only `holdout_v2` is held out.** Scores measure agreement with labels and do not validate real-world safety.
 
 ```powershell
+ npm run eval:validate-holdout
 node evals/run-triage-eval.mjs
 ```
 
-The script writes `evals/BASELINE.md`. To regenerate the deterministic dataset, run `node evals/generate-triage-dataset.mjs` first.
+The schema is `evals/holdout_v2.schema.json`; validation is implemented in `evals/holdoutValidation.mjs`. `evals/holdout_v2.json` is a clearly marked placeholder until scenarios are supplied. Add the populated dataset in its **first Git commit** before evaluating it; after that, the evaluator refuses any later Git history change or working-copy modification. Do not commit the empty placeholder if it will be replaced later. The evaluator reports aggregate-only metrics for all splits, including per-class precision/recall, per-class false-positive rate, confusion matrix, class counts, critical precision, and alert-load. It never prints individual holdout examples. `evals/BASELINE.md` contains the report and groups remaining dev errors by cause.
 
-The dataset is small, synthetic, and author-written. It is useful for deterministic rule regression checks only and must not be presented as evidence of real-world safety performance.
+The old development test split remains in `evals/triage_scenarios.json` for continuity, but it has already been seen during analysis and must not be presented as an independent holdout.
 
 ## Live media integration smoke test
 

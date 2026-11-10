@@ -1,22 +1,24 @@
-# Rule Triage Baseline
+# Triage Evaluation Report
 
-- Dataset version: 1.0.0; 100 synthetic, author-written scenarios.
-- Split: stratified random split by expected threat level, seed 20261110, 70/30 dev/test; assignments are stored per scenario in the dataset file.
-- Method: single deterministic inference per scenario using the current rule engine. No training; the pre-change snapshot was captured before modifying the rules.
-- The test split is held out from rule changes. It is reported only as aggregate metrics; no test scenarios or individual test errors are printed.
+- The development dataset is small, synthetic, and author-written.
+- The original 30% test split was seen during prior analysis; it is labeled “development test, previously seen” and is not a holdout.
+- Only holdout_v2 is designated held out. Its score is meaningful as a frozen evaluation only after the populated file is included in its first Git commit; subsequent history or working-copy changes make evaluation fail closed.
+- Engine: rule-based. No rules were changed for this evaluation update.
+- Holdout Git status: not yet committed; placeholder permitted.
 
-## Before and after
+### Development split
 
-| Split | Version | N | Accuracy | LOW precision | LOW recall | ELEVATED precision | ELEVATED recall | CRITICAL precision | CRITICAL recall |
-|---|---|---:|---:|---:|---:|---:|---:|---:|---:|
-| dev | Before | 70 | 64.3% | 100.0% | 25.0% | 37.8% | 100.0% | 92.3% | 85.7% |
-| dev | After | 70 | 70.0% | 100.0% | 25.0% | 42.4% | 100.0% | 93.3% | 100.0% |
-| test | Before | 30 | 66.7% | 100.0% | 58.3% | 40.0% | 100.0% | 87.5% | 58.3% |
-| test | After | 30 | 83.3% | 100.0% | 58.3% | 60.0% | 100.0% | 92.3% | 100.0% |
+- N: 70; accuracy: 70.0%; critical precision: 93.3%; alert-load (predicted ELEVATED or CRITICAL): 90.0%.
+- Expected counts: LOW 28, ELEVATED 14, CRITICAL 28.
+- Predicted counts: LOW 7, ELEVATED 33, CRITICAL 30.
 
-## Dev confusion matrix after changes
+| Class | Precision | Recall | False-positive rate | Support | Predicted | FP | FN |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| LOW | 100.0% | 25.0% | 0.0% | 28 | 7 | 0 | 21 |
+| ELEVATED | 42.4% | 100.0% | 33.9% | 14 | 33 | 19 | 0 |
+| CRITICAL | 93.3% | 100.0% | 4.8% | 28 | 30 | 2 | 0 |
 
-Rows are expected labels; columns are predicted labels.
+Confusion matrix (rows = expected, columns = predicted):
 
 | Expected \ Predicted | LOW | ELEVATED | CRITICAL |
 |---|---:|---:|---:|
@@ -24,7 +26,19 @@ Rows are expected labels; columns are predicted labels.
 | ELEVATED | 0 | 14 | 0 |
 | CRITICAL | 0 | 0 | 28 |
 
-## Test confusion matrix after changes (aggregate only)
+### Development test, previously seen
+
+- N: 30; accuracy: 83.3%; critical precision: 92.3%; alert-load (predicted ELEVATED or CRITICAL): 76.7%.
+- Expected counts: LOW 12, ELEVATED 6, CRITICAL 12.
+- Predicted counts: LOW 7, ELEVATED 10, CRITICAL 13.
+
+| Class | Precision | Recall | False-positive rate | Support | Predicted | FP | FN |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| LOW | 100.0% | 58.3% | 0.0% | 12 | 7 | 0 | 5 |
+| ELEVATED | 60.0% | 100.0% | 16.7% | 6 | 10 | 4 | 0 |
+| CRITICAL | 92.3% | 100.0% | 5.6% | 12 | 13 | 1 | 0 |
+
+Confusion matrix (rows = expected, columns = predicted):
 
 | Expected \ Predicted | LOW | ELEVATED | CRITICAL |
 |---|---:|---:|---:|
@@ -32,12 +46,20 @@ Rows are expected labels; columns are predicted labels.
 | ELEVATED | 0 | 6 | 0 |
 | CRITICAL | 0 | 0 | 12 |
 
-## Dev false negatives (0)
+### holdout_v2
 
-Listed for development error analysis only. No scenario-level test results are included.
+- Status: pending; holdout_v2 is a placeholder with no labels yet.
+- N: 0; precision, recall, false-positive rates, alert-load, and confusion matrix: N/A.
 
-- None.
+## Remaining development ELEVATED/LOW misclassification patterns
 
-## Limitations
+Grouped by cause; no rule changes were made. This section includes development examples only.
 
-The dataset is small, synthetic, author-written, and not representative of real incident reports. Scores measure agreement with these labels only; they do not establish real-world safety, calibration, robustness, or fairness.
+- Benign check-in language containing an isolation cue: 2
+- Button activation adds an urgency floor despite explicit cancellation or reassurance: 15
+- Mild discomfort or ordinary travel concern triggers elevated wording: 2
+- Negated emergency wording still matches high-severity vocabulary: 2
+
+## Method and limitations
+
+Each scenario is evaluated once with the current deterministic rule engine. Precision, recall, and one-vs-rest false-positive rate are calculated per class. Alert-load is the fraction predicted ELEVATED or CRITICAL. The author-written dataset is small and synthetic; only the frozen holdout_v2 may be described as held out, and even it does not establish real-world safety performance.

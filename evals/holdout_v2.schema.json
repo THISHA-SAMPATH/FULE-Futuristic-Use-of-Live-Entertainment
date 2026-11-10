@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://fule.local/schemas/holdout_v2.schema.json",
+  "title": "FULE triage holdout_v2 dataset",
+  "type": "object",
+  "required": ["dataset_id", "schema_version", "holdout", "placeholder", "scenario_count", "scenarios"],
+  "properties": {
+    "dataset_id": { "const": "holdout_v2" },
+    "schema_version": { "const": "1.0.0" },
+    "holdout": { "const": true },
+    "placeholder": { "type": "boolean" },
+    "note": { "type": "string", "maxLength": 500 },
+    "scenario_count": { "type": "integer", "minimum": 0, "maximum": 10000 },
+    "scenarios": {
+      "type": "array",
+      "maxItems": 10000,
+      "items": {
+        "type": "object",
+        "required": ["scenario_id", "category", "input", "expected_threat_level"],
+        "properties": {
+          "scenario_id": { "type": "string", "minLength": 1, "maxLength": 100 },
+          "category": { "type": "string", "minLength": 1, "maxLength": 80 },
+          "input": {
+            "type": "object",
+            "properties": {
+              "audio_transcript_snippet": { "type": "string", "maxLength": 4000 },
+              "source": { "enum": ["button", "shake", "keyboard", "chat", "redeem", "duress_pin", "safe_walk_timeout", "safe_walk_duress"] },
+              "local_hour": { "type": "integer", "minimum": 0, "maximum": 23 },
+              "risk_level": { "enum": ["standard", "elevated", "high"] }
+            },
+            "additionalProperties": false
+          },
+          "expected_threat_level": { "enum": ["LOW", "ELEVATED", "CRITICAL"] }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "placeholder": { "const": true } } },
+      "then": { "properties": { "scenario_count": { "const": 0 }, "scenarios": { "maxItems": 0 } } },
+      "else": { "properties": { "scenario_count": { "minimum": 1 }, "scenarios": { "minItems": 1 } } }
+    }
+  ],
+  "additionalProperties": false
+}
