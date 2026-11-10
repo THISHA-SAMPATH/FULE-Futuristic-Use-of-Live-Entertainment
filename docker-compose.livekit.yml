@@ -1,0 +1,50 @@
+services:
+  livekit:
+    image: livekit/livekit-server:latest
+    command: ["--config", "/etc/livekit.yaml"]
+    volumes:
+      - ./livekit.local.yaml:/etc/livekit.yaml:ro
+    ports:
+      - "7880:7880/tcp"
+      - "7881:7881/tcp"
+      - "50000-50100:50000-50100/udp"
+    depends_on:
+      redis: { condition: service_healthy }
+  livekit-egress:
+    image: livekit/egress:latest
+    environment:
+      EGRESS_CONFIG_FILE: /etc/egress.yaml
+    volumes:
+      - ./livekit-egress.local.yaml:/etc/egress.yaml:ro
+    depends_on: [livekit, redis, minio]
+  minio:
+    image: minio/minio:latest
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: fule-local
+      MINIO_ROOT_PASSWORD: local-only-change-me
+    ports: ["9000:9000", "9001:9001"]
+    volumes: [fule-livekit-objects:/data]
+  minio-init:
+    image: minio/mc:latest
+    depends_on: [minio]
+    entrypoint: ["/bin/sh", "-c"]
+    command: ["until mc alias set local http://minio:9000 fule-local local-only-change-me; do sleep 1; done; mc mb --ignore-existing local/fule-evidence"]
+  backend:
+    environment:
+      LIVEKIT_URL: ws://localhost:7880
+      LIVEKIT_API_URL: http://livekit:7880
+      LIVEKIT_API_KEY: devkey
+      LIVEKIT_API_SECRET: devsecret-local-only
+      LIVEKIT_WEBHOOK_URL: http://backend:4000/api/livekit/webhook
+      LIVEKIT_EGRESS_S3_BUCKET: fule-evidence
+      LIVEKIT_EGRESS_PREFIX: fule-evidence
+      AWS_ACCESS_KEY_ID: fule-local
+      AWS_SECRET_ACCESS_KEY: local-only-change-me
+      AWS_REGION: us-east-1
+      AWS_S3_ENDPOINT: http://minio:9000
+      AWS_S3_FORCE_PATH_STYLE: "true"
+    depends_on: [livekit, livekit-egress, minio-init]
+
+volumes:
+  fule-livekit-objects:
