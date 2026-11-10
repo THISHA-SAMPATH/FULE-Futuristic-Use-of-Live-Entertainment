@@ -5,6 +5,7 @@ import { execFileSync } from 'node:child_process';
 export const THREAT_LEVELS = ['LOW', 'ELEVATED', 'CRITICAL'];
 const SOURCES = ['button', 'shake', 'keyboard', 'chat', 'redeem', 'duress_pin', 'safe_walk_timeout', 'safe_walk_duress'];
 const RISK_LEVELS = ['standard', 'elevated', 'high'];
+const FINAL_OUTCOMES = ['resolved', 'cancelled', 'false_alarm', 'escalated', 'acknowledged'];
 
 export function validateHoldoutDocument(document) {
   const errors = [];
@@ -41,8 +42,9 @@ export function validateHoldoutDocument(document) {
       const allowedInputKeys = new Set(['audio_transcript_snippet', 'source', 'local_hour', 'risk_level']);
       for (const key of Object.keys(input)) if (!allowedInputKeys.has(key)) issue(`${path}.input.${key}`, 'is not allowed');
     }
-    if (!THREAT_LEVELS.includes(scenario.expected_threat_level)) issue(`${path}.expected_threat_level`, `must be one of ${THREAT_LEVELS.join(', ')}`);
-    for (const key of Object.keys(scenario)) if (!['scenario_id', 'category', 'input', 'expected_threat_level'].includes(key)) issue(`${path}.${key}`, 'is not allowed');
+    if (!THREAT_LEVELS.includes(scenario.trigger_time_label)) issue(`${path}.trigger_time_label`, `must be one of ${THREAT_LEVELS.join(', ')}`);
+    if (!FINAL_OUTCOMES.includes(scenario.final_outcome)) issue(`${path}.final_outcome`, `must be one of ${FINAL_OUTCOMES.join(', ')}`);
+    for (const key of Object.keys(scenario)) if (!['scenario_id', 'category', 'input', 'trigger_time_label', 'final_outcome'].includes(key)) issue(`${path}.${key}`, 'is not allowed');
   }
   for (const key of Object.keys(document)) if (!['dataset_id', 'schema_version', 'holdout', 'placeholder', 'note', 'scenario_count', 'scenarios'].includes(key)) issue(key, 'is not allowed');
   return { valid: errors.length === 0, errors };

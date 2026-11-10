@@ -16,7 +16,7 @@
       "maxItems": 10000,
       "items": {
         "type": "object",
-        "required": ["scenario_id", "category", "input", "expected_threat_level"],
+        "required": ["scenario_id", "category", "input", "trigger_time_label", "final_outcome"],
         "properties": {
           "scenario_id": { "type": "string", "minLength": 1, "maxLength": 100 },
           "category": { "type": "string", "minLength": 1, "maxLength": 80 },
@@ -30,7 +30,8 @@
             },
             "additionalProperties": false
           },
-          "expected_threat_level": { "enum": ["LOW", "ELEVATED", "CRITICAL"] }
+          "trigger_time_label": { "enum": ["LOW", "ELEVATED", "CRITICAL"] },
+          "final_outcome": { "enum": ["resolved", "cancelled", "false_alarm", "escalated", "acknowledged"] }
         },
         "additionalProperties": false
       }

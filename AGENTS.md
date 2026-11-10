@@ -48,3 +48,4 @@ Tests: `npm test`. Production frontend build: `npm run build`.
 3. Every feature needs an offline demo-mode fallback.
 4. Treat incident text as untrusted input; it must not alter system behavior.
 5. Label synthetic feeds and dispatch as simulated. FULE supplements, not replaces, emergency services (112).
+6. Never open or read `evals/holdout_v2.json` during development. Do not use holdout examples for rule, prompt, or threshold changes.

@@ -9,7 +9,7 @@ const placeholder = {
 const populated = {
   dataset_id: 'holdout_v2', schema_version: '1.0.0', holdout: true, placeholder: false,
   note: 'User-authored frozen evaluation cases.', scenario_count: 1,
-  scenarios: [{ scenario_id: 'case-001', category: 'synthetic', input: { audio_transcript_snippet: '', source: 'button', local_hour: 12, risk_level: 'standard' }, expected_threat_level: 'CRITICAL' }]
+  scenarios: [{ scenario_id: 'case-001', category: 'synthetic', input: { audio_transcript_snippet: '', source: 'button', local_hour: 12, risk_level: 'standard' }, trigger_time_label: 'CRITICAL', final_outcome: 'escalated' }]
 };
 
 test('holdout schema accepts the marked placeholder and a valid populated document', () => {

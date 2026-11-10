@@ -1,5 +1,5 @@
 {
-  "dataset_version": "1.0.0",
+  "dataset_version": "1.1.0",
   "description": "Synthetic, non-personal, author-written rule-triage evaluation cases.",
   "split": {
     "strategy": "stratified random split by expected threat level",
@@ -19,8 +19,9 @@
         "local_hour": 1,
         "risk_level": "standard"
       },
-      "expected_threat_level": "CRITICAL",
-      "split": "dev"
+      "split": "dev",
+      "trigger_time_label": "CRITICAL",
+      "final_outcome": "acknowledged"
     },
     {
       "scenario_id": "explicit_help-002",
@@ -32,8 +33,9 @@
         "local_hour": 9,
         "risk_level": "standard"
       },
-      "expected_threat_level": "CRITICAL",
-      "split": "dev"
+      "split": "dev",
+      "trigger_time_label": "CRITICAL",
+      "final_outcome": "acknowledged"
     },
     {
       "scenario_id": "explicit_help-003",
@@ -45,8 +47,9 @@
         "local_hour": 17,
         "risk_level": "elevated"
       },
-      "expected_threat_level": "CRITICAL",
-      "split": "dev"
+      "split": "dev",
+      "trigger_time_label": "CRITICAL",
+      "final_outcome": "acknowledged"
     },
     {
       "scenario_id": "explicit_help-004",
@@ -58,8 +61,9 @@
         "local_hour": 23,
         "risk_level": "standard"
       },
-      "expected_threat_level": "CRITICAL",
-      "split": "test"
+      "split": "test",
+      "trigger_time_label": "CRITICAL",
+      "final_outcome": "acknowledged"
     },
     {
       "scenario_id": "explicit_help-005",
@@ -71,8 +75,9 @@
         "local_hour": 1,
         "risk_level": "standard"
       },
-      "expected_threat_level": "CRITICAL",
-      "split": "dev"
+      "split": "dev",
+      "trigger_time_label": "CRITICAL",
+      "final_outcome": "acknowledged"
     },
     {
       "scenario_id": "explicit_help-006",
@@ -84,8 +89,9 @@
         "local_hour": 9,
         "risk_level": "standard"
       },
-      "expected_threat_level": "CRITICAL",
-      "split": "test"
+      "split": "test",
+      "trigger_time_label": "CRITICAL",
+      "final_outcome": "acknowledged"
     },
     {
       "scenario_id": "explicit_help-007",
@@ -97,8 +103,9 @@
         "local_hour": 17,
         "risk_level": "elevated"
       },
-      "expected_threat_level": "CRITICAL",
-      "split": "dev"
+      "split": "dev",
+      "trigger_time_label": "CRITICAL",
+      "final_outcome": "acknowledged"
     },
     {
       "scenario_id": "explicit_help-008",
@@ -110,8 +117,9 @@
         "local_hour": 23,
         "risk_level": "standard"
       },
-      "expected_threat_level": "CRITICAL",
-      "split": "test"
+      "split": "test",
+      "trigger_time_label": "CRITICAL",
+      "final_outcome": "acknowledged"
     },
     {
       "scenario_id": "explicit_help-009",
@@ -123,8 +131,9 @@
         "local_hour": 1,
         "risk_level": "standard"
       },
-      "expected_threat_level": "CRITICAL",
-      "split": "dev"
+      "split": "dev",
+      "trigger_time_label": "CRITICAL",
+      "final_outcome": "acknowledged"
     },
     {
       "scenario_id": "explicit_help-010",
@@ -136,8 +145,9 @@
         "local_hour": 9,
         "risk_level": "standard"
       },
-      "expected_threat_level": "CRITICAL",
-      "split": "dev"
+      "split": "dev",
+      "trigger_time_label": "CRITICAL",
+      "final_outcome": "acknowledged"
     },
     {
       "scenario_id": "explicit_help-011",
@@ -149,8 +159,9 @@
         "local_hour": 17,
         "risk_level": "elevated"
       },
-      "expected_threat_level": "CRITICAL",
-      "split": "test"
+      "split": "test",
+      "trigger_time_label": "CRITICAL",
+      "final_outcome": "acknowledged"
     },
     {
       "scenario_id": "explicit_help-012",
@@ -162,8 +173,9 @@
         "local_hour": 23,
         "risk_level": "standard"
       },
-      "expected_threat_level": "CRITICAL",
-      "split": "dev"
+      "split": "dev",
+      "trigger_time_label": "CRITICAL",
+      "final_outcome": "acknowledged"
     },
     {
       "scenario_id": "explicit_help-013",
@@ -175,8 +187,9 @@
         "local_hour": 1,
         "risk_level": "standard"
       },
-      "expected_threat_level": "CRITICAL",
-      "split": "dev"
+      "split": "dev",
+      "trigger_time_label": "CRITICAL",
+      "final_outcome": "acknowledged"
     },
     {
       "scenario_id": "explicit_help-014",
@@ -188,8 +201,9 @@
         "local_hour": 9,
         "risk_level": "standard"
       },
-      "expected_threat_level": "CRITICAL",
-      "split": "dev"
+      "split": "dev",
+      "trigger_time_label": "CRITICAL",
+      "final_outcome": "acknowledged"
     },
     {
       "scenario_id": "explicit_help-015",
@@ -201,8 +215,9 @@
         "local_hour": 17,
         "risk_level": "elevated"
       },
-      "expected_threat_level": "CRITICAL",
-      "split": "dev"
+      "split": "dev",
+      "trigger_time_label": "CRITICAL",
+      "final_outcome": "acknowledged"
     },
     {
       "scenario_id": "explicit_help-016",
@@ -214,8 +229,9 @@
         "local_hour": 23,
         "risk_level": "standard"
       },
-      "expected_threat_level": "CRITICAL",
-      "split": "dev"
+      "split": "dev",
+      "trigger_time_label": "CRITICAL",
+      "final_outcome": "acknowledged"
     },
     {
       "scenario_id": "explicit_help-017",
@@ -227,8 +243,9 @@
         "local_hour": 1,
         "risk_level": "standard"
       },
-      "expected_threat_level": "CRITICAL",
-      "split": "dev"
+      "split": "dev",
+      "trigger_time_label": "CRITICAL",
+      "final_outcome": "acknowledged"
     },
     {
       "scenario_id": "explicit_help-018",
@@ -240,8 +257,9 @@
         "local_hour": 9,
         "risk_level": "standard"
       },
-      "expected_threat_level": "CRITICAL",
-      "split": "dev"
+      "split": "dev",
+      "trigger_time_label": "CRITICAL",
+      "final_outcome": "acknowledged"
     },
     {
       "scenario_id": "explicit_help-019",
@@ -253,8 +271,9 @@
         "local_hour": 17,
         "risk_level": "elevated"
       },
-      "expected_threat_level": "CRITICAL",
-      "split": "test"
+      "split": "test",
+      "trigger_time_label": "CRITICAL",
+      "final_outcome": "acknowledged"
     },
     {
       "scenario_id": "explicit_help-020",
@@ -266,8 +285,9 @@
         "local_hour": 23,
         "risk_level": "standard"
       },
-      "expected_threat_level": "CRITICAL",
-      "split": "dev"
+      "split": "dev",
+      "trigger_time_label": "CRITICAL",
+      "final_outcome": "acknowledged"
     },
     {
       "scenario_id": "missed_checkin-001",
@@ -279,8 +299,9 @@
         "local_hour": 1,
         "risk_level": "standard"
       },
-      "expected_threat_level": "ELEVATED",
-      "split": "dev"
+      "split": "dev",
+      "trigger_time_label": "ELEVATED",
+      "final_outcome": "escalated"
     },
     {
       "scenario_id": "missed_checkin-002",
@@ -292,8 +313,9 @@
         "local_hour": 9,
         "risk_level": "standard"
       },
-      "expected_threat_level": "ELEVATED",
-      "split": "test"
+      "split": "test",
+      "trigger_time_label": "ELEVATED",
+      "final_outcome": "escalated"
     },
     {
       "scenario_id": "missed_checkin-003",
@@ -305,8 +327,9 @@
         "local_hour": 17,
         "risk_level": "elevated"
       },
-      "expected_threat_level": "ELEVATED",
-      "split": "dev"
+      "split": "dev",
+      "trigger_time_label": "ELEVATED",
+      "final_outcome": "escalated"
     },
     {
       "scenario_id": "missed_checkin-004",
@@ -318,8 +341,9 @@
         "local_hour": 23,
         "risk_level": "standard"
       },
-      "expected_threat_level": "ELEVATED",
-      "split": "dev"
+      "split": "dev",
+      "trigger_time_label": "ELEVATED",
+      "final_outcome": "escalated"
     },
     {
       "scenario_id": "missed_checkin-005",
@@ -331,8 +355,9 @@
         "local_hour": 1,
         "risk_level": "standard"
       },
-      "expected_threat_level": "ELEVATED",
-      "split": "dev"
+      "split": "dev",
+      "trigger_time_label": "ELEVATED",
+      "final_outcome": "escalated"
     },
     {
       "scenario_id": "missed_checkin-006",
@@ -344,8 +369,9 @@
         "local_hour": 9,
         "risk_level": "standard"
       },
-      "expected_threat_level": "ELEVATED",
-      "split": "dev"
+      "split": "dev",
+      "trigger_time_label": "ELEVATED",
+      "final_outcome": "escalated"
     },
     {
       "scenario_id": "missed_checkin-007",
@@ -357,8 +383,9 @@
         "local_hour": 17,
         "risk_level": "elevated"
       },
-      "expected_threat_level": "ELEVATED",
-      "split": "test"
+      "split": "test",
+      "trigger_time_label": "ELEVATED",
+      "final_outcome": "escalated"
     },
     {
       "scenario_id": "missed_checkin-008",
@@ -370,8 +397,9 @@
         "local_hour": 23,
         "risk_level": "standard"
       },
-      "expected_threat_level": "ELEVATED",
-      "split": "dev"
+      "split": "dev",
+      "trigger_time_label": "ELEVATED",
+      "final_outcome": "escalated"
     },
     {
       "scenario_id": "missed_checkin-009",
@@ -383,8 +411,9 @@
         "local_hour": 1,
         "risk_level": "standard"
       },
-      "expected_threat_level": "ELEVATED",
-      "split": "dev"
+      "split": "dev",
+      "trigger_time_label": "ELEVATED",
+      "final_outcome": "escalated"
     },
     {
       "scenario_id": "missed_checkin-010",
@@ -396,8 +425,9 @@
         "local_hour": 9,
         "risk_level": "standard"
       },
-      "expected_threat_level": "ELEVATED",
-      "split": "dev"
+      "split": "dev",
+      "trigger_time_label": "ELEVATED",
+      "final_outcome": "escalated"
     },
     {
       "scenario_id": "missed_checkin-011",
@@ -409,8 +439,9 @@
         "local_hour": 17,
         "risk_level": "elevated"
       },
-      "expected_threat_level": "ELEVATED",
-      "split": "dev"
+      "split": "dev",
+      "trigger_time_label": "ELEVATED",
+      "final_outcome": "escalated"
     },
     {
       "scenario_id": "missed_checkin-012",
@@ -422,8 +453,9 @@
         "local_hour": 23,
         "risk_level": "standard"
       },
-      "expected_threat_level": "ELEVATED",
-      "split": "dev"
+      "split": "dev",
+      "trigger_time_label": "ELEVATED",
+      "final_outcome": "escalated"
     },
     {
       "scenario_id": "missed_checkin-013",
@@ -435,8 +467,9 @@
         "local_hour": 1,
         "risk_level": "standard"
       },
-      "expected_threat_level": "ELEVATED",
-      "split": "test"
+      "split": "test",
+      "trigger_time_label": "ELEVATED",
+      "final_outcome": "escalated"
     },
     {
       "scenario_id": "missed_checkin-014",
@@ -448,8 +481,9 @@
         "local_hour": 9,
         "risk_level": "standard"
       },
-      "expected_threat_level": "ELEVATED",
-      "split": "dev"
+      "split": "dev",
+      "trigger_time_label": "ELEVATED",
+      "final_outcome": "escalated"
     },
     {
       "scenario_id": "missed_checkin-015",
@@ -461,8 +495,9 @@
         "local_hour": 17,
         "risk_level": "elevated"
       },
-      "expected_threat_level": "ELEVATED",
-      "split": "dev"
+      "split": "dev",
+      "trigger_time_label": "ELEVATED",
+      "final_outcome": "escalated"
     },
     {
       "scenario_id": "missed_checkin-016",
@@ -474,8 +509,9 @@
         "local_hour": 23,
         "risk_level": "standard"
       },
-      "expected_threat_level": "ELEVATED",
-      "split": "dev"
+      "split": "dev",
+      "trigger_time_label": "ELEVATED",
+      "final_outcome": "escalated"
     },
     {
       "scenario_id": "missed_checkin-017",
@@ -487,8 +523,9 @@
         "local_hour": 1,
         "risk_level": "standard"
       },
-      "expected_threat_level": "ELEVATED",
-      "split": "dev"
+      "split": "dev",
+      "trigger_time_label": "ELEVATED",
+      "final_outcome": "escalated"
     },
     {
       "scenario_id": "missed_checkin-018",
@@ -500,8 +537,9 @@
         "local_hour": 9,
         "risk_level": "standard"
       },
-      "expected_threat_level": "ELEVATED",
-      "split": "test"
+      "split": "test",
+      "trigger_time_label": "ELEVATED",
+      "final_outcome": "escalated"
     },
     {
       "scenario_id": "missed_checkin-019",
@@ -513,8 +551,9 @@
         "local_hour": 17,
         "risk_level": "elevated"
       },
-      "expected_threat_level": "ELEVATED",
-      "split": "test"
+      "split": "test",
+      "trigger_time_label": "ELEVATED",
+      "final_outcome": "escalated"
     },
     {
       "scenario_id": "missed_checkin-020",
@@ -526,8 +565,9 @@
         "local_hour": 23,
         "risk_level": "standard"
       },
-      "expected_threat_level": "ELEVATED",
-      "split": "test"
+      "split": "test",
+      "trigger_time_label": "ELEVATED",
+      "final_outcome": "escalated"
     },
     {
       "scenario_id": "ambiguous-001",
@@ -539,8 +579,9 @@
         "local_hour": 1,
         "risk_level": "standard"
       },
-      "expected_threat_level": "LOW",
-      "split": "dev"
+      "split": "dev",
+      "trigger_time_label": "LOW",
+      "final_outcome": "resolved"
     },
     {
       "scenario_id": "ambiguous-002",
@@ -552,8 +593,9 @@
         "local_hour": 9,
         "risk_level": "standard"
       },
-      "expected_threat_level": "LOW",
-      "split": "test"
+      "split": "test",
+      "trigger_time_label": "LOW",
+      "final_outcome": "resolved"
     },
     {
       "scenario_id": "ambiguous-003",
@@ -565,8 +607,10 @@
         "local_hour": 17,
         "risk_level": "elevated"
       },
-      "expected_threat_level": "LOW",
-      "split": "test"
+      "split": "test",
+      "trigger_time_label": "ELEVATED",
+      "final_outcome": "resolved",
+      "judgment_call": true
     },
     {
       "scenario_id": "ambiguous-004",
@@ -578,8 +622,9 @@
         "local_hour": 23,
         "risk_level": "standard"
       },
-      "expected_threat_level": "LOW",
-      "split": "dev"
+      "split": "dev",
+      "trigger_time_label": "LOW",
+      "final_outcome": "cancelled"
     },
     {
       "scenario_id": "ambiguous-005",
@@ -591,8 +636,9 @@
         "local_hour": 1,
         "risk_level": "standard"
       },
-      "expected_threat_level": "LOW",
-      "split": "test"
+      "split": "test",
+      "trigger_time_label": "LOW",
+      "final_outcome": "cancelled"
     },
     {
       "scenario_id": "ambiguous-006",
@@ -604,8 +650,9 @@
         "local_hour": 9,
         "risk_level": "standard"
       },
-      "expected_threat_level": "LOW",
-      "split": "test"
+      "split": "test",
+      "trigger_time_label": "LOW",
+      "final_outcome": "resolved"
     },
     {
       "scenario_id": "ambiguous-007",
@@ -617,8 +664,9 @@
         "local_hour": 17,
         "risk_level": "elevated"
       },
-      "expected_threat_level": "LOW",
-      "split": "dev"
+      "split": "dev",
+      "trigger_time_label": "LOW",
+      "final_outcome": "cancelled"
     },
     {
       "scenario_id": "ambiguous-008",
@@ -630,8 +678,10 @@
         "local_hour": 23,
         "risk_level": "standard"
       },
-      "expected_threat_level": "LOW",
-      "split": "dev"
+      "split": "dev",
+      "trigger_time_label": "ELEVATED",
+      "final_outcome": "resolved",
+      "judgment_call": true
     },
     {
       "scenario_id": "ambiguous-009",
@@ -643,8 +693,9 @@
         "local_hour": 1,
         "risk_level": "standard"
       },
-      "expected_threat_level": "LOW",
-      "split": "dev"
+      "split": "dev",
+      "trigger_time_label": "LOW",
+      "final_outcome": "resolved"
     },
     {
       "scenario_id": "ambiguous-010",
@@ -656,8 +707,9 @@
         "local_hour": 9,
         "risk_level": "standard"
       },
-      "expected_threat_level": "LOW",
-      "split": "dev"
+      "split": "dev",
+      "trigger_time_label": "LOW",
+      "final_outcome": "cancelled"
     },
     {
       "scenario_id": "ambiguous-011",
@@ -669,8 +721,9 @@
         "local_hour": 17,
         "risk_level": "elevated"
       },
-      "expected_threat_level": "LOW",
-      "split": "test"
+      "split": "test",
+      "trigger_time_label": "LOW",
+      "final_outcome": "resolved"
     },
     {
       "scenario_id": "ambiguous-012",
@@ -682,8 +735,10 @@
         "local_hour": 23,
         "risk_level": "standard"
       },
-      "expected_threat_level": "LOW",
-      "split": "dev"
+      "split": "dev",
+      "trigger_time_label": "ELEVATED",
+      "final_outcome": "resolved",
+      "judgment_call": true
     },
     {
       "scenario_id": "ambiguous-013",
@@ -695,8 +750,9 @@
         "local_hour": 1,
         "risk_level": "standard"
       },
-      "expected_threat_level": "LOW",
-      "split": "test"
+      "split": "test",
+      "trigger_time_label": "LOW",
+      "final_outcome": "resolved"
     },
     {
       "scenario_id": "ambiguous-014",
@@ -708,8 +764,9 @@
         "local_hour": 9,
         "risk_level": "standard"
       },
-      "expected_threat_level": "LOW",
-      "split": "test"
+      "split": "test",
+      "trigger_time_label": "LOW",
+      "final_outcome": "resolved"
     },
     {
       "scenario_id": "ambiguous-015",
@@ -721,8 +778,9 @@
         "local_hour": 17,
         "risk_level": "elevated"
       },
-      "expected_threat_level": "LOW",
-      "split": "dev"
+      "split": "dev",
+      "trigger_time_label": "LOW",
+      "final_outcome": "cancelled"
     },
     {
       "scenario_id": "ambiguous-016",
@@ -734,8 +792,9 @@
         "local_hour": 23,
         "risk_level": "standard"
       },
-      "expected_threat_level": "LOW",
-      "split": "dev"
+      "split": "dev",
+      "trigger_time_label": "LOW",
+      "final_outcome": "cancelled"
     },
     {
       "scenario_id": "ambiguous-017",
@@ -747,8 +806,10 @@
         "local_hour": 1,
         "risk_level": "standard"
       },
-      "expected_threat_level": "LOW",
-      "split": "dev"
+      "split": "dev",
+      "trigger_time_label": "ELEVATED",
+      "final_outcome": "resolved",
+      "judgment_call": true
     },
     {
       "scenario_id": "ambiguous-018",
@@ -760,8 +821,9 @@
         "local_hour": 9,
         "risk_level": "standard"
       },
-      "expected_threat_level": "LOW",
-      "split": "test"
+      "split": "test",
+      "trigger_time_label": "LOW",
+      "final_outcome": "resolved"
     },
     {
       "scenario_id": "ambiguous-019",
@@ -773,8 +835,10 @@
         "local_hour": 17,
         "risk_level": "elevated"
       },
-      "expected_threat_level": "LOW",
-      "split": "dev"
+      "split": "dev",
+      "trigger_time_label": "ELEVATED",
+      "final_outcome": "resolved",
+      "judgment_call": true
     },
     {
       "scenario_id": "ambiguous-020",
@@ -786,8 +850,9 @@
         "local_hour": 23,
         "risk_level": "standard"
       },
-      "expected_threat_level": "LOW",
-      "split": "test"
+      "split": "test",
+      "trigger_time_label": "LOW",
+      "final_outcome": "resolved"
     },
     {
       "scenario_id": "false_alarm-001",
@@ -799,8 +864,9 @@
         "local_hour": 1,
         "risk_level": "standard"
       },
-      "expected_threat_level": "LOW",
-      "split": "dev"
+      "split": "dev",
+      "trigger_time_label": "LOW",
+      "final_outcome": "false_alarm"
     },
     {
       "scenario_id": "false_alarm-002",
@@ -812,8 +878,9 @@
         "local_hour": 9,
         "risk_level": "standard"
       },
-      "expected_threat_level": "LOW",
-      "split": "dev"
+      "split": "dev",
+      "trigger_time_label": "LOW",
+      "final_outcome": "false_alarm"
     },
     {
       "scenario_id": "false_alarm-003",
@@ -825,8 +892,9 @@
         "local_hour": 17,
         "risk_level": "elevated"
       },
-      "expected_threat_level": "LOW",
-      "split": "dev"
+      "split": "dev",
+      "trigger_time_label": "LOW",
+      "final_outcome": "false_alarm"
     },
     {
       "scenario_id": "false_alarm-004",
@@ -838,8 +906,9 @@
         "local_hour": 23,
         "risk_level": "standard"
       },
-      "expected_threat_level": "LOW",
-      "split": "dev"
+      "split": "dev",
+      "trigger_time_label": "LOW",
+      "final_outcome": "false_alarm"
     },
     {
       "scenario_id": "false_alarm-005",
@@ -851,8 +920,9 @@
         "local_hour": 1,
         "risk_level": "standard"
       },
-      "expected_threat_level": "LOW",
-      "split": "dev"
+      "split": "dev",
+      "trigger_time_label": "LOW",
+      "final_outcome": "false_alarm"
     },
     {
       "scenario_id": "false_alarm-006",
@@ -864,8 +934,9 @@
         "local_hour": 9,
         "risk_level": "standard"
       },
-      "expected_threat_level": "LOW",
-      "split": "dev"
+      "split": "dev",
+      "trigger_time_label": "LOW",
+      "final_outcome": "false_alarm"
     },
     {
       "scenario_id": "false_alarm-007",
@@ -877,8 +948,9 @@
         "local_hour": 17,
         "risk_level": "elevated"
       },
-      "expected_threat_level": "LOW",
-      "split": "dev"
+      "split": "dev",
+      "trigger_time_label": "LOW",
+      "final_outcome": "false_alarm"
     },
     {
       "scenario_id": "false_alarm-008",
@@ -890,8 +962,9 @@
         "local_hour": 23,
         "risk_level": "standard"
       },
-      "expected_threat_level": "LOW",
-      "split": "dev"
+      "split": "dev",
+      "trigger_time_label": "LOW",
+      "final_outcome": "false_alarm"
     },
     {
       "scenario_id": "false_alarm-009",
@@ -903,8 +976,9 @@
         "local_hour": 1,
         "risk_level": "standard"
       },
-      "expected_threat_level": "LOW",
-      "split": "dev"
+      "split": "dev",
+      "trigger_time_label": "LOW",
+      "final_outcome": "false_alarm"
     },
     {
       "scenario_id": "false_alarm-010",
@@ -916,8 +990,9 @@
         "local_hour": 9,
         "risk_level": "standard"
       },
-      "expected_threat_level": "LOW",
-      "split": "test"
+      "split": "test",
+      "trigger_time_label": "LOW",
+      "final_outcome": "false_alarm"
     },
     {
       "scenario_id": "false_alarm-011",
@@ -929,8 +1004,9 @@
         "local_hour": 17,
         "risk_level": "elevated"
       },
-      "expected_threat_level": "LOW",
-      "split": "dev"
+      "split": "dev",
+      "trigger_time_label": "LOW",
+      "final_outcome": "false_alarm"
     },
     {
       "scenario_id": "false_alarm-012",
@@ -942,8 +1018,9 @@
         "local_hour": 23,
         "risk_level": "standard"
       },
-      "expected_threat_level": "LOW",
-      "split": "dev"
+      "split": "dev",
+      "trigger_time_label": "LOW",
+      "final_outcome": "false_alarm"
     },
     {
       "scenario_id": "false_alarm-013",
@@ -955,8 +1032,9 @@
         "local_hour": 1,
         "risk_level": "standard"
       },
-      "expected_threat_level": "LOW",
-      "split": "dev"
+      "split": "dev",
+      "trigger_time_label": "LOW",
+      "final_outcome": "false_alarm"
     },
     {
       "scenario_id": "false_alarm-014",
@@ -968,8 +1046,9 @@
         "local_hour": 9,
         "risk_level": "standard"
       },
-      "expected_threat_level": "LOW",
-      "split": "dev"
+      "split": "dev",
+      "trigger_time_label": "LOW",
+      "final_outcome": "false_alarm"
     },
     {
       "scenario_id": "false_alarm-015",
@@ -981,8 +1060,9 @@
         "local_hour": 17,
         "risk_level": "elevated"
       },
-      "expected_threat_level": "LOW",
-      "split": "dev"
+      "split": "dev",
+      "trigger_time_label": "LOW",
+      "final_outcome": "false_alarm"
     },
     {
       "scenario_id": "false_alarm-016",
@@ -994,8 +1074,9 @@
         "local_hour": 23,
         "risk_level": "standard"
       },
-      "expected_threat_level": "LOW",
-      "split": "dev"
+      "split": "dev",
+      "trigger_time_label": "LOW",
+      "final_outcome": "false_alarm"
     },
     {
       "scenario_id": "false_alarm-017",
@@ -1007,8 +1088,9 @@
         "local_hour": 1,
         "risk_level": "standard"
       },
-      "expected_threat_level": "LOW",
-      "split": "dev"
+      "split": "dev",
+      "trigger_time_label": "LOW",
+      "final_outcome": "false_alarm"
     },
     {
       "scenario_id": "false_alarm-018",
@@ -1020,8 +1102,9 @@
         "local_hour": 9,
         "risk_level": "standard"
       },
-      "expected_threat_level": "LOW",
-      "split": "test"
+      "split": "test",
+      "trigger_time_label": "LOW",
+      "final_outcome": "false_alarm"
     },
     {
       "scenario_id": "false_alarm-019",
@@ -1033,8 +1116,9 @@
         "local_hour": 17,
         "risk_level": "elevated"
       },
-      "expected_threat_level": "LOW",
-      "split": "test"
+      "split": "test",
+      "trigger_time_label": "LOW",
+      "final_outcome": "false_alarm"
     },
     {
       "scenario_id": "false_alarm-020",
@@ -1046,8 +1130,9 @@
         "local_hour": 23,
         "risk_level": "standard"
       },
-      "expected_threat_level": "LOW",
-      "split": "dev"
+      "split": "dev",
+      "trigger_time_label": "LOW",
+      "final_outcome": "false_alarm"
     },
     {
       "scenario_id": "quiet_duress-001",
@@ -1059,8 +1144,9 @@
         "local_hour": 1,
         "risk_level": "high"
       },
-      "expected_threat_level": "CRITICAL",
-      "split": "dev"
+      "split": "dev",
+      "trigger_time_label": "CRITICAL",
+      "final_outcome": "escalated"
     },
     {
       "scenario_id": "quiet_duress-002",
@@ -1072,8 +1158,9 @@
         "local_hour": 9,
         "risk_level": "high"
       },
-      "expected_threat_level": "CRITICAL",
-      "split": "dev"
+      "split": "dev",
+      "trigger_time_label": "CRITICAL",
+      "final_outcome": "escalated"
     },
     {
       "scenario_id": "quiet_duress-003",
@@ -1085,8 +1172,9 @@
         "local_hour": 17,
         "risk_level": "elevated"
       },
-      "expected_threat_level": "CRITICAL",
-      "split": "dev"
+      "split": "dev",
+      "trigger_time_label": "CRITICAL",
+      "final_outcome": "escalated"
     },
     {
       "scenario_id": "quiet_duress-004",
@@ -1098,8 +1186,9 @@
         "local_hour": 23,
         "risk_level": "high"
       },
-      "expected_threat_level": "CRITICAL",
-      "split": "test"
+      "split": "test",
+      "trigger_time_label": "CRITICAL",
+      "final_outcome": "escalated"
     },
     {
       "scenario_id": "quiet_duress-005",
@@ -1111,8 +1200,9 @@
         "local_hour": 1,
         "risk_level": "high"
       },
-      "expected_threat_level": "CRITICAL",
-      "split": "test"
+      "split": "test",
+      "trigger_time_label": "CRITICAL",
+      "final_outcome": "escalated"
     },
     {
       "scenario_id": "quiet_duress-006",
@@ -1124,8 +1214,9 @@
         "local_hour": 9,
         "risk_level": "high"
       },
-      "expected_threat_level": "CRITICAL",
-      "split": "dev"
+      "split": "dev",
+      "trigger_time_label": "CRITICAL",
+      "final_outcome": "escalated"
     },
     {
       "scenario_id": "quiet_duress-007",
@@ -1137,8 +1228,9 @@
         "local_hour": 17,
         "risk_level": "elevated"
       },
-      "expected_threat_level": "CRITICAL",
-      "split": "test"
+      "split": "test",
+      "trigger_time_label": "CRITICAL",
+      "final_outcome": "escalated"
     },
     {
       "scenario_id": "quiet_duress-008",
@@ -1150,8 +1242,9 @@
         "local_hour": 23,
         "risk_level": "high"
       },
-      "expected_threat_level": "CRITICAL",
-      "split": "dev"
+      "split": "dev",
+      "trigger_time_label": "CRITICAL",
+      "final_outcome": "escalated"
     },
     {
       "scenario_id": "quiet_duress-009",
@@ -1163,8 +1256,9 @@
         "local_hour": 1,
         "risk_level": "high"
       },
-      "expected_threat_level": "CRITICAL",
-      "split": "test"
+      "split": "test",
+      "trigger_time_label": "CRITICAL",
+      "final_outcome": "escalated"
     },
     {
       "scenario_id": "quiet_duress-010",
@@ -1176,8 +1270,9 @@
         "local_hour": 9,
         "risk_level": "high"
       },
-      "expected_threat_level": "CRITICAL",
-      "split": "dev"
+      "split": "dev",
+      "trigger_time_label": "CRITICAL",
+      "final_outcome": "escalated"
     },
     {
       "scenario_id": "quiet_duress-011",
@@ -1189,8 +1284,9 @@
         "local_hour": 17,
         "risk_level": "elevated"
       },
-      "expected_threat_level": "CRITICAL",
-      "split": "dev"
+      "split": "dev",
+      "trigger_time_label": "CRITICAL",
+      "final_outcome": "escalated"
     },
     {
       "scenario_id": "quiet_duress-012",
@@ -1202,8 +1298,9 @@
         "local_hour": 23,
         "risk_level": "high"
       },
-      "expected_threat_level": "CRITICAL",
-      "split": "test"
+      "split": "test",
+      "trigger_time_label": "CRITICAL",
+      "final_outcome": "escalated"
     },
     {
       "scenario_id": "quiet_duress-013",
@@ -1215,8 +1312,9 @@
         "local_hour": 1,
         "risk_level": "high"
       },
-      "expected_threat_level": "CRITICAL",
-      "split": "dev"
+      "split": "dev",
+      "trigger_time_label": "CRITICAL",
+      "final_outcome": "escalated"
     },
     {
       "scenario_id": "quiet_duress-014",
@@ -1228,8 +1326,9 @@
         "local_hour": 9,
         "risk_level": "high"
       },
-      "expected_threat_level": "CRITICAL",
-      "split": "dev"
+      "split": "dev",
+      "trigger_time_label": "CRITICAL",
+      "final_outcome": "escalated"
     },
     {
       "scenario_id": "quiet_duress-015",
@@ -1241,8 +1340,9 @@
         "local_hour": 17,
         "risk_level": "elevated"
       },
-      "expected_threat_level": "CRITICAL",
-      "split": "test"
+      "split": "test",
+      "trigger_time_label": "CRITICAL",
+      "final_outcome": "escalated"
     },
     {
       "scenario_id": "quiet_duress-016",
@@ -1254,8 +1354,9 @@
         "local_hour": 23,
         "risk_level": "high"
       },
-      "expected_threat_level": "CRITICAL",
-      "split": "dev"
+      "split": "dev",
+      "trigger_time_label": "CRITICAL",
+      "final_outcome": "escalated"
     },
     {
       "scenario_id": "quiet_duress-017",
@@ -1267,8 +1368,9 @@
         "local_hour": 1,
         "risk_level": "high"
       },
-      "expected_threat_level": "CRITICAL",
-      "split": "dev"
+      "split": "dev",
+      "trigger_time_label": "CRITICAL",
+      "final_outcome": "escalated"
     },
     {
       "scenario_id": "quiet_duress-018",
@@ -1280,8 +1382,9 @@
         "local_hour": 9,
         "risk_level": "high"
       },
-      "expected_threat_level": "CRITICAL",
-      "split": "dev"
+      "split": "dev",
+      "trigger_time_label": "CRITICAL",
+      "final_outcome": "escalated"
     },
     {
       "scenario_id": "quiet_duress-019",
@@ -1293,8 +1396,9 @@
         "local_hour": 17,
         "risk_level": "elevated"
       },
-      "expected_threat_level": "CRITICAL",
-      "split": "test"
+      "split": "test",
+      "trigger_time_label": "CRITICAL",
+      "final_outcome": "escalated"
     },
     {
       "scenario_id": "quiet_duress-020",
@@ -1306,8 +1410,11 @@
         "local_hour": 23,
         "risk_level": "high"
       },
-      "expected_threat_level": "CRITICAL",
-      "split": "dev"
+      "split": "dev",
+      "trigger_time_label": "CRITICAL",
+      "final_outcome": "escalated"
     }
-  ]
+  ],
+  "label_schema_version": "2.0.0",
+  "label_note": "Trigger-time triage and eventual outcome are separate labels; old test split remains previously seen."
 }

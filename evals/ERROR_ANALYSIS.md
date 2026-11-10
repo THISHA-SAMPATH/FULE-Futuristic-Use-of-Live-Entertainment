@@ -1,26 +1,20 @@
-# Triage Error Analysis
+# Development Error Analysis
 
-## Prior critical false negatives
+This analysis covers the 17 development-split mismatches against `trigger_time_label` after the five judgment-call relabels. The triage rules were not changed. All IDs below are from the dev split of the synthetic, author-written dataset; the previously seen test split is excluded.
 
-The original full-set baseline reported nine expected-CRITICAL cases as ELEVATED. They fall into two recurring failure patterns:
+| Cause and prediction | Scenario IDs | Count | Assessment |
+|---|---|---:|---|
+| Benign accidental/test/cancel wording remains ELEVATED because button source adds an urgency floor | `false_alarm-001`, `false_alarm-002`, `false_alarm-003`, `false_alarm-004`, `false_alarm-005`, `false_alarm-006`, `false_alarm-008`, `false_alarm-009`, `false_alarm-011`, `false_alarm-012`, `false_alarm-013`, `false_alarm-015`, `false_alarm-016`, `false_alarm-017`, `false_alarm-020` | 15 | Rule gap: the current scoring adds button urgency without discounting clear accidental activation or reassurance in the provided first-report text. |
+| Negated emergency language is still matched as CRITICAL | `false_alarm-007`, `false_alarm-014` | 2 | Rule gap: keyword matching does not account for negation around “emergency.” |
 
-| Pattern | Count | Why the previous rules missed it |
-|---|---:|---|
-| Violence or escape language expressed in an unrecognized word form | 4 | The rules used a few exact word forms. Related forms such as an ongoing harm action, a person described as an attacker, and inability to leave did not reliably match those literal alternatives. |
-| Quiet duress signal | 5 | The engine treated the event like an ordinary button alert. Silence and elevated user risk yielded only ELEVATED during daytime, and the duress source itself had no score. |
+There are no cases in these 17 that we classified as ambiguous labels or label errors: each input contains explicit benign/negated wording in the transcript supplied to triage, and the expected first-report label is LOW. The `false_alarm` final outcome was not used to change the trigger-time label. That distinction matters: a later false-alarm resolution alone would not justify a LOW label at initial report.
 
-## Rule changes and data boundary
+## Judgment-call labels
 
-Changes were selected from the **dev split only**. Its four pre-change critical false negatives comprised two violence/escape language cases and two quiet-duress cases. The held-out test examples were not inspected individually or used to change rules.
+The separate five `judgment_call` scenarios were reviewed against first-report context, not their eventual outcomes. Their updated labels now agree with the unchanged engine. Those relabels account for the reported accuracy increase; they do not resolve the 17 dev rule-gap cases listed above.
 
-- Replaced narrow violence word forms with broader morphological stems and a general inability-to-leave/escape pattern. This targets the linguistic pattern rather than memorizing an example sentence.
-- Added a strong score contribution for explicit duress source metadata. The ordinary silence, time-of-day, and user-risk signals remain in place.
-- Did not add a repeated-trigger heuristic: no dev-set failure established that as the cause of an error, and event-repeat metadata is not currently part of the triage input contract.
+## Fixed operating point (analysis only)
 
-## Observed effect
+On dev, setting the ELEVATED score cutoff to 5 while keeping CRITICAL at 7 yields 58.6% alert-load, 100.0% ELEVATED precision, 61.1% ELEVATED recall, and 100.0% CRITICAL recall. This is reported for comparison only and is not applied to production rules. The observed dev sample therefore shows no CRITICAL recall cost at that point, while ELEVATED recall drops by 38.9 percentage points.
 
-On dev, critical recall increased from 85.7% to 100.0%, and overall accuracy increased from 64.3% to 70.0%. The aggregate test scores also changed, but the test split is small and synthetic; that result is not evidence of generalization. Full metrics and aggregate-only test confusion matrix are in `BASELINE.md`.
-
-## Limits
-
-These are author-written synthetic cases, not reports from people experiencing emergencies. The error categories reflect this dataset's wording and labels, not the full range of language, dialects, disability-related communication, or real incident context. Human responders must remain responsible for decisions.
+These findings are limited to a small, synthetic, author-written dataset whose dangerous-case base rate is intentionally high. Precision is likely optimistic; FPR and alert-load remain the main caution measures.

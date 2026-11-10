@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://fule.local/schemas/triage_scenarios.schema.json",
+  "title": "FULE development triage scenarios",
+  "type": "object",
+  "required": ["dataset_version", "label_schema_version", "split", "scenario_count", "scenarios"],
+  "properties": {
+    "dataset_version": { "type": "string" },
+    "label_schema_version": { "const": "2.0.0" },
+    "description": { "type": "string" },
+    "split": {
+      "type": "object",
+      "required": ["strategy", "dev_ratio", "test_ratio", "seed"],
+      "properties": {
+        "strategy": { "type": "string" },
+        "dev_ratio": { "type": "number", "minimum": 0, "maximum": 1 },
+        "test_ratio": { "type": "number", "minimum": 0, "maximum": 1 },
+        "seed": { "type": "integer" }
+      },
+      "additionalProperties": false
+    },
+    "scenario_count": { "type": "integer", "minimum": 1, "maximum": 10000 },
+    "scenarios": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["scenario_id", "category", "description", "input", "split", "trigger_time_label", "final_outcome"],
+        "properties": {
+          "scenario_id": { "type": "string", "minLength": 1, "maxLength": 100 },
+          "category": { "type": "string", "minLength": 1, "maxLength": 80 },
+          "description": { "type": "string", "maxLength": 500 },
+          "input": {
+            "type": "object",
+            "properties": {
+              "audio_transcript_snippet": { "type": "string", "maxLength": 4000 },
+              "source": { "enum": ["button", "shake", "keyboard", "chat", "redeem", "duress_pin", "safe_walk_timeout", "safe_walk_duress"] },
+              "local_hour": { "type": "integer", "minimum": 0, "maximum": 23 },
+              "risk_level": { "enum": ["standard", "elevated", "high"] }
+            },
+            "additionalProperties": false
+          },
+          "split": { "enum": ["dev", "test"] },
+          "trigger_time_label": { "enum": ["LOW", "ELEVATED", "CRITICAL"] },
+          "final_outcome": { "enum": ["resolved", "cancelled", "false_alarm", "escalated", "acknowledged"] },
+          "judgment_call": { "type": "boolean" }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

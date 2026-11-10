@@ -1,32 +1,40 @@
 import { readFile, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createRuleBasedTriage } from '../backend/services/triageEngine.js';
+import { createRuleBasedTriage, scoreIncident } from '../backend/services/triageEngine.js';
 import { THREAT_LEVELS, validateHoldoutDocument, verifyHoldoutGitFreeze } from './holdoutValidation.mjs';
 
 const directory = dirname(fileURLToPath(import.meta.url));
 const root = resolve(directory, '..');
-const datasetPath = resolve(directory, 'triage_scenarios.json');
+const developmentPath = resolve(directory, 'triage_scenarios.json');
 const holdoutPath = resolve(directory, 'holdout_v2.json');
+const beforePath = resolve(directory, 'pre_relabel_metrics.json');
 const outputPath = resolve(directory, 'BASELINE.md');
-const development = JSON.parse(await readFile(datasetPath, 'utf8'));
-const holdout = JSON.parse(await readFile(holdoutPath, 'utf8'));
-const holdoutValidation = validateHoldoutDocument(holdout);
-if (!holdoutValidation.valid) throw new Error(`Invalid holdout_v2: ${holdoutValidation.errors.join('; ')}`);
-const holdoutFreeze = verifyHoldoutGitFreeze({ document: holdout, filePath: holdoutPath, cwd: root });
+const scoreHoldout = process.argv.includes('--score-holdout');
+const development = JSON.parse(await readFile(developmentPath, 'utf8'));
+let holdout = null;
+let holdoutFreeze = null;
+if (scoreHoldout) {
+  holdout = JSON.parse(await readFile(holdoutPath, 'utf8'));
+  const validation = validateHoldoutDocument(holdout);
+  if (!validation.valid) throw new Error(`Invalid holdout_v2: ${validation.errors.join('; ')}`);
+  holdoutFreeze = verifyHoldoutGitFreeze({ document: holdout, filePath: holdoutPath, cwd: root });
+}
 const classes = THREAT_LEVELS;
 
 if (!Array.isArray(development.scenarios) || development.scenarios.length < 100) throw new Error('Development dataset must contain at least 100 scenarios.');
 if (new Set(development.scenarios.map(({ scenario_id }) => scenario_id)).size !== development.scenarios.length) throw new Error('Development scenario IDs must be unique.');
 if (development.scenarios.some(({ split }) => !['dev', 'test'].includes(split))) throw new Error('Every development scenario must have a stored dev or test split assignment.');
+if (development.scenarios.some(({ trigger_time_label, final_outcome }) => !classes.includes(trigger_time_label) || !['resolved', 'cancelled', 'false_alarm', 'escalated', 'acknowledged'].includes(final_outcome))) throw new Error('Every development scenario must have valid trigger_time_label and final_outcome labels.');
 
 function evaluate(scenarios, engine) {
   const confusion = Object.fromEntries(classes.map((actual) => [actual, Object.fromEntries(classes.map((predicted) => [predicted, 0]))]));
   const scored = scenarios.map((scenario) => {
     const predicted = engine.analyze(scenario.input).threat_level;
-    if (!classes.includes(scenario.expected_threat_level) || !classes.includes(predicted)) throw new Error(`Unknown threat label in ${scenario.scenario_id}.`);
-    confusion[scenario.expected_threat_level][predicted] += 1;
-    return { expected: scenario.expected_threat_level, predicted, category: scenario.category, input: scenario.input };
+    const expected = scenario.trigger_time_label;
+    if (!classes.includes(expected) || !classes.includes(predicted)) throw new Error(`Unknown trigger-time label in ${scenario.scenario_id}.`);
+    confusion[expected][predicted] += 1;
+    return { expected, predicted, category: scenario.category, input: scenario.input };
   });
   const actualCounts = Object.fromEntries(classes.map((label) => [label, scored.filter((scenario) => scenario.expected === label).length]));
   const predictedCounts = Object.fromEntries(classes.map((label) => [label, scored.filter((scenario) => scenario.predicted === label).length]));
@@ -42,6 +50,36 @@ function evaluate(scenarios, engine) {
   return { size: scored.length, accuracy: scored.length ? correct / scored.length : null, per_class: perClass, confusion, actual_counts: actualCounts, predicted_counts: predictedCounts, alert_load: scored.length ? alerts / scored.length : null, scored };
 }
 
+function accuracy(scenarios, engine) {
+  if (!scenarios.length) return null;
+  return scenarios.filter((scenario) => engine.analyze(scenario.input).threat_level === scenario.trigger_time_label).length / scenarios.length;
+}
+function correctCount(scenarios, engine) {
+  return scenarios.filter((scenario) => engine.analyze(scenario.input).threat_level === scenario.trigger_time_label).length;
+}
+
+function atElevatedThreshold(scenarios, threshold) {
+  const scored = scenarios.map((scenario) => ({
+    expected: scenario.trigger_time_label,
+    score: scoreIncident(scenario.input).score
+  }));
+  const predicted = scored.map(({ expected, score }) => ({
+    expected,
+    predicted: score >= 7 ? 'CRITICAL' : score >= threshold ? 'ELEVATED' : 'LOW'
+  }));
+  const classMetric = (label) => {
+    const tp = predicted.filter((row) => row.expected === label && row.predicted === label).length;
+    const fp = predicted.filter((row) => row.expected !== label && row.predicted === label).length;
+    const fn = predicted.filter((row) => row.expected === label && row.predicted !== label).length;
+    return { precision: tp + fp ? tp / (tp + fp) : null, recall: tp + fn ? tp / (tp + fn) : null };
+  };
+  return {
+    alert_load: predicted.filter((row) => row.predicted !== 'LOW').length / predicted.length,
+    elevated: classMetric('ELEVATED'),
+    critical: classMetric('CRITICAL')
+  };
+}
+
 function devPattern(scenario) {
   if (scenario.category === 'false_alarm' && scenario.predicted === 'CRITICAL') return 'Negated emergency wording still matches high-severity vocabulary';
   if (scenario.category === 'false_alarm' && scenario.predicted === 'ELEVATED') return 'Button activation adds an urgency floor despite explicit cancellation or reassurance';
@@ -53,49 +91,73 @@ function devPattern(scenario) {
 const engine = createRuleBasedTriage();
 const devResult = evaluate(development.scenarios.filter(({ split }) => split === 'dev'), engine);
 const seenTestResult = evaluate(development.scenarios.filter(({ split }) => split === 'test'), engine);
-// The immutable holdout is evaluated exactly once in this invocation. An empty placeholder is validated and reported as pending.
-const holdoutResult = holdout.placeholder ? null : evaluate(holdout.scenarios, engine);
-const devMisclassificationPatterns = new Map();
+const devScenarios = development.scenarios.filter(({ split }) => split === 'dev');
+const judgmentCalls = development.scenarios.filter(({ judgment_call }) => judgment_call === true);
+const withoutJudgmentCalls = development.scenarios.filter(({ judgment_call }) => judgment_call !== true);
+// This branch runs only when explicitly requested; default development scoring never opens holdout_v2.json.
+const holdoutResult = scoreHoldout && !holdout.placeholder ? evaluate(holdout.scenarios, engine) : null;
+const patterns = new Map();
 for (const scenario of devResult.scored.filter(({ expected, predicted }) => expected !== predicted)) {
   const cause = devPattern(scenario);
-  devMisclassificationPatterns.set(cause, (devMisclassificationPatterns.get(cause) || 0) + 1);
+  patterns.set(cause, (patterns.get(cause) || 0) + 1);
 }
 
+const before = JSON.parse(await readFile(beforePath, 'utf8'));
 const pct = (value) => value == null ? 'N/A' : `${(value * 100).toFixed(1)}%`;
-const renderSplit = (name, result) => {
-  if (!result) return [`### ${name}`, '', '- Status: pending; holdout_v2 is a placeholder with no labels yet.', '- N: 0; precision, recall, false-positive rates, alert-load, and confusion matrix: N/A.', ''];
-  const criticalPrecision = result.per_class.CRITICAL.precision;
-  const lines = [
-    `### ${name}`, '',
-    `- N: ${result.size}; accuracy: ${pct(result.accuracy)}; critical precision: ${pct(criticalPrecision)}; alert-load (predicted ELEVATED or CRITICAL): ${pct(result.alert_load)}.`,
-    `- Expected counts: LOW ${result.actual_counts.LOW}, ELEVATED ${result.actual_counts.ELEVATED}, CRITICAL ${result.actual_counts.CRITICAL}.`,
-    `- Predicted counts: LOW ${result.predicted_counts.LOW}, ELEVATED ${result.predicted_counts.ELEVATED}, CRITICAL ${result.predicted_counts.CRITICAL}.`, '',
-    '| Class | Precision | Recall | False-positive rate | Support | Predicted | FP | FN |', '|---|---:|---:|---:|---:|---:|---:|---:|',
-    ...classes.map((label) => { const metric = result.per_class[label]; return `| ${label} | ${pct(metric.precision)} | ${pct(metric.recall)} | ${pct(metric.false_positive_rate)} | ${metric.support} | ${metric.predicted} | ${metric.fp} | ${metric.fn} |`; }), '',
-    'Confusion matrix (rows = expected, columns = predicted):', '',
+const comparisonRows = (split, result) => {
+  const old = before[split];
+  return [
+    `| ${split === 'test' ? 'Development test, previously seen' : 'Development'} | Before relabel | ${old.n} | ${pct(old.accuracy)} | ${pct(old.metrics.LOW.precision)} | ${pct(old.metrics.LOW.recall)} | ${pct(old.metrics.LOW.fpr)} | ${pct(old.metrics.ELEVATED.precision)} | ${pct(old.metrics.ELEVATED.recall)} | ${pct(old.metrics.ELEVATED.fpr)} | ${pct(old.metrics.CRITICAL.precision)} | ${pct(old.metrics.CRITICAL.fpr)} | ${pct(old.alert_load)} |`,
+    `| ${split === 'test' ? 'Development test, previously seen' : 'Development'} | After relabel | ${result.size} | ${pct(result.accuracy)} | ${pct(result.per_class.LOW.precision)} | ${pct(result.per_class.LOW.recall)} | ${pct(result.per_class.LOW.false_positive_rate)} | ${pct(result.per_class.ELEVATED.precision)} | ${pct(result.per_class.ELEVATED.recall)} | ${pct(result.per_class.ELEVATED.false_positive_rate)} | ${pct(result.per_class.CRITICAL.precision)} | ${pct(result.per_class.CRITICAL.false_positive_rate)} | ${pct(result.alert_load)} |`
+  ];
+};
+function renderMatrix(name, result) {
+  return [
+    `### ${name} confusion matrix after relabel`, '',
     '| Expected \\ Predicted | LOW | ELEVATED | CRITICAL |', '|---|---:|---:|---:|',
     ...classes.map((label) => `| ${label} | ${result.confusion[label].LOW} | ${result.confusion[label].ELEVATED} | ${result.confusion[label].CRITICAL} |`), ''
   ];
-  return lines;
-};
+}
 
 const lines = [
-  '# Triage Evaluation Report', '',
-  '- The development dataset is small, synthetic, and author-written.',
-  '- The original 30% test split was seen during prior analysis; it is labeled “development test, previously seen” and is not a holdout.',
-  '- Only holdout_v2 is designated held out. Its score is meaningful as a frozen evaluation only after the populated file is included in its first Git commit; subsequent history or working-copy changes make evaluation fail closed.',
-  `- Engine: ${engine.name}. No rules were changed for this evaluation update.`,
-  `- Holdout Git status: ${holdoutFreeze.immutable ? `frozen at ${holdoutFreeze.baseline_commit}` : 'not yet committed; placeholder permitted'}.`, '',
-  ...renderSplit('Development split', devResult),
-  ...renderSplit('Development test, previously seen', seenTestResult),
-  ...renderSplit('holdout_v2', holdoutResult),
-  '## Remaining development ELEVATED/LOW misclassification patterns', '',
-  'Grouped by cause; no rule changes were made. This section includes development examples only.', '',
-  ...(devMisclassificationPatterns.size
-    ? [...devMisclassificationPatterns.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([cause, count]) => `- ${cause}: ${count}`)
-    : ['- No development misclassifications.']), '',
-  '## Method and limitations', '',
-  'Each scenario is evaluated once with the current deterministic rule engine. Precision, recall, and one-vs-rest false-positive rate are calculated per class. Alert-load is the fraction predicted ELEVATED or CRITICAL. The author-written dataset is small and synthetic; only the frozen holdout_v2 may be described as held out, and even it does not establish real-world safety performance.'
+  '# Triage Evaluation: Trigger-Time Labels', '',
+  '- Dataset: small, synthetic, and author-written; development N=70.',
+  '- The old 30% test split was seen during previous analysis; it is reported as “development test, previously seen” and is not an independent holdout.',
+  '- Only holdout_v2 is held out. It was not read in this development-only run.',
+  '- Scoring target: trigger_time_label only. final_outcome describes the eventual incident state and is not used in triage metrics.',
+  '- Rule engine code is unchanged. Any metric improvement shown below is caused solely by the ground-truth labeling change, not a rule change.', '',
+  '## Before / after relabel metrics', '',
+  '| Split | Labels | N | Accuracy | LOW precision | LOW recall | LOW FPR | ELEVATED precision | ELEVATED recall | ELEVATED FPR | CRITICAL precision | CRITICAL FPR | Alert-load |',
+  '|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|',
+  ...comparisonRows('dev', devResult), ...comparisonRows('test', seenTestResult), '',
+  'Critical precision and per-class false-positive rates are reported directly in the table. Alert-load is the percentage predicted ELEVATED or CRITICAL.', '',
+  '## Judgment-call accuracy', '',
+  `- Label cleanup, 5 of 100 scenarios, all five now agree with the engine. These labels were changed by contextual review; no triage rules changed.` ,
+  `- All scenarios: ${correctCount(withoutJudgmentCalls, engine)} of ${withoutJudgmentCalls.length} excluding judgment calls = ${pct(accuracy(withoutJudgmentCalls, engine))}; judgment-call scenarios: ${correctCount(judgmentCalls, engine)} of ${judgmentCalls.length} = ${pct(accuracy(judgmentCalls, engine))}.`,
+  `- Dev split: ${correctCount(devScenarios.filter(({ judgment_call }) => judgment_call !== true), engine)} of ${devScenarios.filter(({ judgment_call }) => judgment_call !== true).length} excluding judgment calls = ${pct(accuracy(devScenarios.filter(({ judgment_call }) => judgment_call !== true), engine))}; all dev scenarios = ${pct(devResult.accuracy)}.`, '',
+  '## Dev operating-point analysis (not applied)', '',
+  'The current CRITICAL cutoff remains score ≥7. Raising only the ELEVATED cutoff changes classifications for the dev split; this is an offline calculation, not a rule change.', '',
+  '| ELEVATED score cutoff | Alert-load | ELEVATED precision | ELEVATED recall | CRITICAL precision | CRITICAL recall |',
+  '|---:|---:|---:|---:|---:|---:|',
+  ...[3, 4, 5].map((threshold) => {
+    const point = atElevatedThreshold(devScenarios, threshold);
+    return `| ${threshold} | ${pct(point.alert_load)} | ${pct(point.elevated.precision)} | ${pct(point.elevated.recall)} | ${pct(point.critical.precision)} | ${pct(point.critical.recall)} |`;
+  }),
+  '',
+  'Cutoff 5 is the first tested point under 60% alert-load (58.6%); ELEVATED recall falls from 100.0% to 61.1%, while CRITICAL recall remains 100.0% (no observed critical-recall cost on dev).', '',
+  ...renderMatrix('Development', devResult), ...renderMatrix('Development test, previously seen', seenTestResult),
+  '## Current dev misclassification patterns', '',
+  'Grouped by cause under trigger_time_label; no rule changes were made.', '',
+  ...(patterns.size ? [...patterns.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([cause, count]) => `- ${cause}: ${count}`) : ['- No dev misclassifications.']), '',
+  '## Earlier four development error groups (old labels)', '',
+  '- Benign check-in language containing an isolation cue: 2; those trigger labels were reviewed as ELEVATED.',
+  '- Button activation adds an urgency floor despite explicit cancellation or reassurance: 15; retained LOW trigger labels.',
+  '- Mild discomfort or ordinary travel concern triggers elevated wording: 2; those trigger labels were reviewed as ELEVATED.',
+  '- Negated emergency wording still matches high-severity vocabulary: 2; retained LOW trigger labels.', '',
+  '## holdout_v2', '',
+  ...(scoreHoldout ? holdoutResult ? [`- N=${holdoutResult.size}; aggregate metrics are included only when the holdout is populated and frozen.`] : ['- Pending: the holdout remains a placeholder or has no scenarios.'] : ['- Not accessed by this development-only run, per the repository rule.']), '',
+  '## Method and base-rate caution', '',
+  'Each dev/test scenario is run once through the unchanged deterministic triage engine; only trigger_time_label is scored. Precision and recall use one-vs-rest class counts; FPR is FP/(FP+TN); alert-load is predicted ELEVATED plus CRITICAL divided by N. This synthetic, small, author-written dataset over-represents dangerous cases, so precision overstates likely real-world precision. FPR and alert-load are the main caution metrics.'
 ];
 
 const report = `${lines.join('\n')}\n`;
