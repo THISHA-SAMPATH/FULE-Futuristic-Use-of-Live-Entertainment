@@ -49,6 +49,13 @@ test('generalized violence language and duress/check-in source context raise tri
   assert.equal(triage.analyze({ audio_transcript_snippet: '', source: 'safe_walk_timeout', local_hour: 12 }).threat_level, 'ELEVATED');
 });
 
+test('general negation scope cancels matching danger weights without lowering unrelated positive danger signals', () => {
+  const triage = createRuleBasedTriage();
+  assert.equal(triage.analyze({ audio_transcript_snippet: 'No emergency; I only wanted to inspect the button.', source: 'button', local_hour: 9, risk_level: 'standard' }).threat_level, 'LOW');
+  assert.equal(triage.analyze({ audio_transcript_snippet: 'This is not an emergency; the button was tapped accidentally.', source: 'button', local_hour: 9, risk_level: 'standard' }).threat_level, 'LOW');
+  assert.equal(triage.analyze({ audio_transcript_snippet: 'I am not being attacked, but someone is following me.', source: 'chat', local_hour: 12 }).threat_level, 'CRITICAL');
+});
+
 test('triage can be replaced behind the engine interface', async () => {
   const custom = { name: 'test-local-model', analyze: () => ({ threat_level: 'LOW', summary: 'local model', recommended_action: 'CHECK_IN' }) };
   setTriageEngine(custom);

@@ -104,7 +104,22 @@ Base rates matter: the synthetic dataset intentionally over-represents dangerous
 | Previously seen test (30) | 83.3% → 86.7% | 86.2% (25/29) |
 | Combined (100) | 74.0% → 79.0% | 77.9% (74/95) |
 
-Offline operating-point analysis only: raising the ELEVATED score cutoff from 3 to 5 brings dev alert-load below 60% (90.0% → 58.6%) and ELEVATED recall falls from 100.0% to 61.1%; CRITICAL recall remains 100.0% on dev. This cutoff is not applied to the rule engine. Full details are in `evals/BASELINE.md`.
+Offline operating-point analysis only: after the negation fix, raising the ELEVATED score cutoff from 3 to 5 brings dev alert-load below 60% (87.1% → 55.7%) and ELEVATED recall falls from 100.0% to 61.1%; CRITICAL recall remains 100.0% on dev. This cutoff is not applied to the rule engine. Full details are in `evals/BASELINE.md`.
+
+The evaluation was subsequently split into `context_triage` and `trigger_policy` **after seeing the 15 button-floor errors**. This is a post-hoc measurement change, not a model improvement. `context_triage` excludes button/redeem sources; `trigger_policy` explicitly checks the separate rule that an active button SOS cannot be below CRITICAL until cancelled.
+
+| Suite / split | Before split or policy | After | Interpretation |
+|---|---:|---:|---|
+| context_triage · dev accuracy (N=38) | 100.0% | 100.0% | No button/redeem triggers; the measured context set is unchanged. |
+| context_triage · seen test accuracy (N=22) | 95.5% | 95.5% | Previously seen test data. |
+| trigger_policy · dev button scenarios | 17/32 pass | 32/32 pass | The explicit active-button severity floor is now enforced. |
+| trigger_policy · seen test button scenarios | 6/8 pass | 8/8 pass | Descriptive only; this split has already been seen. |
+
+Separately, general negation handling improved raw engine metrics on dev from 75.7% to 78.6% accuracy and reduced CRITICAL false positives from 2 to 0. This is a rule change, distinct from the post-hoc suite split and label cleanup.
+
+## Tiered delivery (opt-in)
+
+Set `FULE_TIERED_DELIVERY=true` to enable routing by severity; it defaults to off. CRITICAL incidents interrupt verified guardians immediately. ELEVATED incidents notify the trusted circle with a check-in prompt and then escalate if no one responds/cancels. LOW incidents are audited without notifications. With the flag off, existing delivery behavior is retained. Button-triggered SOS remains CRITICAL while active in either mode; policy-floored button events keep the existing 10-second cancellation grace before dispatch.
 
 ```powershell
 node evals/run-triage-eval.mjs

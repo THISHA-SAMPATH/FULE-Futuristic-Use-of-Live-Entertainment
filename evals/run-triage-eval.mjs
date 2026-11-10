@@ -2,6 +2,7 @@ import { readFile, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createRuleBasedTriage, scoreIncident } from '../backend/services/triageEngine.js';
+import { applyButtonTriggerFloor } from '../backend/services/deliveryPolicy.js';
 import { THREAT_LEVELS, validateHoldoutDocument, verifyHoldoutGitFreeze } from './holdoutValidation.mjs';
 
 const directory = dirname(fileURLToPath(import.meta.url));
@@ -9,6 +10,7 @@ const root = resolve(directory, '..');
 const developmentPath = resolve(directory, 'triage_scenarios.json');
 const holdoutPath = resolve(directory, 'holdout_v2.json');
 const beforePath = resolve(directory, 'pre_relabel_metrics.json');
+const beforeSuitePath = resolve(directory, 'pre_tiered_suite_metrics.json');
 const outputPath = resolve(directory, 'BASELINE.md');
 const scoreHoldout = process.argv.includes('--score-holdout');
 const development = JSON.parse(await readFile(developmentPath, 'utf8'));
@@ -103,12 +105,45 @@ for (const scenario of devResult.scored.filter(({ expected, predicted }) => expe
 }
 
 const before = JSON.parse(await readFile(beforePath, 'utf8'));
+const beforeSuites = JSON.parse(await readFile(beforeSuitePath, 'utf8'));
 const pct = (value) => value == null ? 'N/A' : `${(value * 100).toFixed(1)}%`;
+const contextTriages = Object.fromEntries(['dev', 'test'].map((split) => [split, evaluate(
+  development.scenarios.filter((scenario) => scenario.split === split && !['button', 'redeem'].includes(scenario.input.source)), engine
+)]));
+const buttonPolicy = Object.fromEntries(['dev', 'test'].map((split) => {
+  const scenarios = development.scenarios.filter((scenario) => scenario.split === split && scenario.input.source === 'button');
+  const passed = scenarios.filter((scenario) => applyButtonTriggerFloor({ source: scenario.input.source, threat_level: engine.analyze(scenario.input).threat_level, status: 'PENDING_DISPATCH' }) === 'CRITICAL').length;
+  return [split, { n: scenarios.length, pass: passed, fail: scenarios.length - passed }];
+}));
+const buttonPolicyRows = ['dev', 'test'].flatMap((split) => {
+  const label = split === 'test' ? 'Previously seen test' : 'Dev';
+  const old = beforeSuites.splits[split].trigger_policy;
+  const current = buttonPolicy[split];
+  return [
+    `| ${label} | Before trigger policy | ${old.n} | ${old.pass} | ${old.fail} | ${pct(old.pass / old.n)} |`,
+    `| ${label} | After trigger policy | ${current.n} | ${current.pass} | ${current.fail} | ${pct(current.pass / current.n)} |`
+  ];
+});
+const contextRows = ['dev', 'test'].flatMap((split) => {
+  const label = split === 'test' ? 'Previously seen test' : 'Dev';
+  const old = beforeSuites.splits[split].context_triage;
+  const current = contextTriages[split];
+  const render = (stage, result) => `| ${label} | ${stage} | ${result.size} | ${pct(result.accuracy)} | ${pct(result.per_class.LOW.precision)} / ${pct(result.per_class.LOW.recall)} | ${pct(result.per_class.LOW.false_positive_rate)} | ${pct(result.per_class.ELEVATED.precision)} / ${pct(result.per_class.ELEVATED.recall)} | ${pct(result.per_class.ELEVATED.false_positive_rate)} | ${pct(result.per_class.CRITICAL.precision)} / ${pct(result.per_class.CRITICAL.recall)} | ${pct(result.per_class.CRITICAL.false_positive_rate)} | ${pct(result.alert_load)} |`;
+  const fromSnapshot = {
+    size: old.n, accuracy: old.accuracy, per_class: Object.fromEntries(classes.map((c) => [c, {
+      precision: old.per_class[c].precision, recall: old.per_class[c].recall, false_positive_rate: old.per_class[c].fpr
+    }])), alert_load: old.alert_load
+  };
+  return [render('Before split / negation change', fromSnapshot), render('After', current)];
+});
+const devCriticalFalsePositives = devResult.per_class.CRITICAL.fp;
+const operatingPoints = [3, 4, 5].map((threshold) => ({ threshold, ...atElevatedThreshold(devScenarios, threshold) }));
 const comparisonRows = (split, result) => {
   const old = before[split];
+  const cleanupAfter = beforeSuites.splits[split].full_dataset_after_label_cleanup;
   return [
     `| ${split === 'test' ? 'Development test, previously seen' : 'Development'} | Before relabel | ${old.n} | ${pct(old.accuracy)} | ${pct(old.metrics.LOW.precision)} | ${pct(old.metrics.LOW.recall)} | ${pct(old.metrics.LOW.fpr)} | ${pct(old.metrics.ELEVATED.precision)} | ${pct(old.metrics.ELEVATED.recall)} | ${pct(old.metrics.ELEVATED.fpr)} | ${pct(old.metrics.CRITICAL.precision)} | ${pct(old.metrics.CRITICAL.fpr)} | ${pct(old.alert_load)} |`,
-    `| ${split === 'test' ? 'Development test, previously seen' : 'Development'} | After relabel | ${result.size} | ${pct(result.accuracy)} | ${pct(result.per_class.LOW.precision)} | ${pct(result.per_class.LOW.recall)} | ${pct(result.per_class.LOW.false_positive_rate)} | ${pct(result.per_class.ELEVATED.precision)} | ${pct(result.per_class.ELEVATED.recall)} | ${pct(result.per_class.ELEVATED.false_positive_rate)} | ${pct(result.per_class.CRITICAL.precision)} | ${pct(result.per_class.CRITICAL.false_positive_rate)} | ${pct(result.alert_load)} |`
+    `| ${split === 'test' ? 'Development test, previously seen' : 'Development'} | After label cleanup, before negation fix | ${cleanupAfter.n} | ${pct(cleanupAfter.accuracy)} | ${pct(cleanupAfter.per_class.LOW.precision)} | ${pct(cleanupAfter.per_class.LOW.recall)} | ${pct(cleanupAfter.per_class.LOW.fpr)} | ${pct(cleanupAfter.per_class.ELEVATED.precision)} | ${pct(cleanupAfter.per_class.ELEVATED.recall)} | ${pct(cleanupAfter.per_class.ELEVATED.fpr)} | ${pct(cleanupAfter.per_class.CRITICAL.precision)} | ${pct(cleanupAfter.per_class.CRITICAL.fpr)} | ${pct(cleanupAfter.alert_load)} |`
   ];
 };
 function renderMatrix(name, result) {
@@ -125,31 +160,44 @@ const lines = [
   '- The old 30% test split was seen during previous analysis; it is reported as “development test, previously seen” and is not an independent holdout.',
   '- Only holdout_v2 is held out. It was not read in this development-only run.',
   '- Scoring target: trigger_time_label only. final_outcome describes the eventual incident state and is not used in triage metrics.',
-  '- Rule engine code is unchanged. Any metric improvement shown below is caused solely by the ground-truth labeling change, not a rule change.', '',
+  '- The historical label-cleanup comparison isolates that label change. This run also includes a general negation-handling rule fix; its dev-only effect is reported separately below.', '',
   '## Before / after relabel metrics', '',
   '| Split | Labels | N | Accuracy | LOW precision | LOW recall | LOW FPR | ELEVATED precision | ELEVATED recall | ELEVATED FPR | CRITICAL precision | CRITICAL FPR | Alert-load |',
   '|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|',
   ...comparisonRows('dev', devResult), ...comparisonRows('test', seenTestResult), '',
   'Critical precision and per-class false-positive rates are reported directly in the table. Alert-load is the percentage predicted ELEVATED or CRITICAL.', '',
+  '## context_triage suite', '',
+  'Includes dev/test scenarios whose source is not button or redeem. Metrics are engine scores, before trigger-policy delivery floors.', '',
+  '| Split | Measurement | N | Accuracy | LOW precision / recall | LOW FPR | ELEVATED precision / recall | ELEVATED FPR | CRITICAL precision / recall | CRITICAL FPR | Alert-load |',
+  '|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|',
+  ...contextRows, '',
+  '## trigger_policy suite', '',
+  'Explicit pass/fail assertions over button-source scenarios: active button SOS must remain CRITICAL until cancelled.', '',
+  '| Split | Measurement | N | Pass | Fail | Pass rate |', '|---|---|---:|---:|---:|---:|',
+  ...buttonPolicyRows, '',
+  '## Negation fix: dev-only engine comparison', '',
+  'This comparison uses all dev scenarios before delivery policy is applied. General negation scope suppresses contradicted danger signals; no scenario-specific phrases were added.', '',
+  '| Engine version | N | Accuracy | CRITICAL false positives | Alert-load |', '|---|---:|---:|---:|---:|',
+  `| Before general negation handling | 70 | ${pct(beforeSuites.splits.dev.full_dev_engine_metrics.accuracy)} | 2 | ${pct(beforeSuites.splits.dev.full_dev_engine_metrics.alert_load)} |`,
+  `| After general negation handling | 70 | ${pct(devResult.accuracy)} | ${devCriticalFalsePositives} | ${pct(devResult.alert_load)} |`, '',
   '## Judgment-call accuracy', '',
-  `- Label cleanup, 5 of 100 scenarios, all five now agree with the engine. These labels were changed by contextual review; no triage rules changed.` ,
+  `- Label cleanup, 5 of 100 scenarios, all five now agree with the engine. The label change itself did not change rules; this later run reports the separate negation-rule fix above.`,
   `- All scenarios: ${correctCount(withoutJudgmentCalls, engine)} of ${withoutJudgmentCalls.length} excluding judgment calls = ${pct(accuracy(withoutJudgmentCalls, engine))}; judgment-call scenarios: ${correctCount(judgmentCalls, engine)} of ${judgmentCalls.length} = ${pct(accuracy(judgmentCalls, engine))}.`,
   `- Dev split: ${correctCount(devScenarios.filter(({ judgment_call }) => judgment_call !== true), engine)} of ${devScenarios.filter(({ judgment_call }) => judgment_call !== true).length} excluding judgment calls = ${pct(accuracy(devScenarios.filter(({ judgment_call }) => judgment_call !== true), engine))}; all dev scenarios = ${pct(devResult.accuracy)}.`, '',
   '## Dev operating-point analysis (not applied)', '',
   'The current CRITICAL cutoff remains score ≥7. Raising only the ELEVATED cutoff changes classifications for the dev split; this is an offline calculation, not a rule change.', '',
   '| ELEVATED score cutoff | Alert-load | ELEVATED precision | ELEVATED recall | CRITICAL precision | CRITICAL recall |',
   '|---:|---:|---:|---:|---:|---:|',
-  ...[3, 4, 5].map((threshold) => {
-    const point = atElevatedThreshold(devScenarios, threshold);
-    return `| ${threshold} | ${pct(point.alert_load)} | ${pct(point.elevated.precision)} | ${pct(point.elevated.recall)} | ${pct(point.critical.precision)} | ${pct(point.critical.recall)} |`;
+  ...operatingPoints.map((point) => {
+    return `| ${point.threshold} | ${pct(point.alert_load)} | ${pct(point.elevated.precision)} | ${pct(point.elevated.recall)} | ${pct(point.critical.precision)} | ${pct(point.critical.recall)} |`;
   }),
   '',
-  'Cutoff 5 is the first tested point under 60% alert-load (58.6%); ELEVATED recall falls from 100.0% to 61.1%, while CRITICAL recall remains 100.0% (no observed critical-recall cost on dev).', '',
+  `Cutoff 5 is the first tested point under 60% alert-load (${pct(operatingPoints.find(({ threshold }) => threshold === 5).alert_load)}); ELEVATED recall falls from ${pct(operatingPoints[0].elevated.recall)} to ${pct(operatingPoints.find(({ threshold }) => threshold === 5).elevated.recall)}, while CRITICAL recall remains ${pct(operatingPoints.find(({ threshold }) => threshold === 5).critical.recall)} (no observed critical-recall cost on dev).`, '',
   ...renderMatrix('Development', devResult), ...renderMatrix('Development test, previously seen', seenTestResult),
   '## Current dev misclassification patterns', '',
-  'Grouped by cause under trigger_time_label; no rule changes were made.', '',
-  ...(patterns.size ? [...patterns.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([cause, count]) => `- ${cause}: ${count}`) : ['- No dev misclassifications.']), '',
-  '## Earlier four development error groups (old labels)', '',
+  'Grouped by cause after the negation fix; the remaining button-floor cases are handled separately by trigger_policy.', '',
+  ...(patterns.size ? [...patterns.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([cause, count]) => `- ${cause}: ${count}; these are button-only raw-engine mismatches and are separated into trigger_policy.`) : ['- No dev misclassifications.']), '',
+  '## Earlier four development error groups (old labels, before negation fix)', '',
   '- Benign check-in language containing an isolation cue: 2; those trigger labels were reviewed as ELEVATED.',
   '- Button activation adds an urgency floor despite explicit cancellation or reassurance: 15; retained LOW trigger labels.',
   '- Mild discomfort or ordinary travel concern triggers elevated wording: 2; those trigger labels were reviewed as ELEVATED.',
@@ -157,7 +205,7 @@ const lines = [
   '## holdout_v2', '',
   ...(scoreHoldout ? holdoutResult ? [`- N=${holdoutResult.size}; aggregate metrics are included only when the holdout is populated and frozen.`] : ['- Pending: the holdout remains a placeholder or has no scenarios.'] : ['- Not accessed by this development-only run, per the repository rule.']), '',
   '## Method and base-rate caution', '',
-  'Each dev/test scenario is run once through the unchanged deterministic triage engine; only trigger_time_label is scored. Precision and recall use one-vs-rest class counts; FPR is FP/(FP+TN); alert-load is predicted ELEVATED plus CRITICAL divided by N. This synthetic, small, author-written dataset over-represents dangerous cases, so precision overstates likely real-world precision. FPR and alert-load are the main caution metrics.'
+  'Each development/test scenario is scored against trigger_time_label. context_triage evaluates the raw deterministic engine on sources other than button/redeem; trigger_policy evaluates the separate active-button delivery floor. Precision and recall use one-vs-rest class counts; FPR is FP/(FP+TN); alert-load is predicted ELEVATED plus CRITICAL divided by N. The historical label-cleanup rows are pre-negation-change metrics; the separate dev-only negation table measures the later rule change. This synthetic, small, author-written dataset over-represents dangerous cases, so precision overstates likely real-world precision. FPR and alert-load are the main caution metrics.'
 ];
 
 const report = `${lines.join('\n')}\n`;

@@ -103,6 +103,8 @@ services:
     environment:
       NODE_ENV: development
       DEMO_MODE: ${DEMO_MODE:-true}
+      FULE_TIERED_DELIVERY: ${FULE_TIERED_DELIVERY:-false}
+      FULE_BUTTON_DISPATCH_GRACE_MS: ${FULE_BUTTON_DISPATCH_GRACE_MS:-10000}
       PORT: 4000
       DATABASE_URL: postgres://fule:${POSTGRES_PASSWORD}@postgres:5432/fule
       REDIS_URL: redis://redis:6379

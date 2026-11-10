@@ -14,7 +14,7 @@ export const INCIDENT_SCHEMA = Object.freeze({
   required: [
     'incident_id', 'threat_level', 'module', 'location', 'summary',
     'recommended_action', 'status', 'created_at', 'acknowledged_by', 'stream_url', 'source', 'escalated', 'escalation_flag',
-    'transcript_snippet', 'streamer_contact', 'guardian_responses', 'acknowledged_at', 'contacts_notified_at', 'dispatch_record', 'dispatch_stage', 'repeat_offender'
+    'transcript_snippet', 'streamer_contact', 'guardian_responses', 'acknowledged_at', 'contacts_notified_at', 'dispatch_record', 'dispatch_stage', 'repeat_offender', 'button_policy_floor'
   ],
   properties: {
     incident_id: { type: 'string' },
@@ -45,7 +45,8 @@ export const INCIDENT_SCHEMA = Object.freeze({
     contacts_notified_at: { type: ['string', 'null'] },
     dispatch_record: { type: ['object', 'null'] },
     dispatch_stage: { type: 'string', enum: [...DISPATCH_STAGES] },
-    repeat_offender: { type: 'boolean' }
+    repeat_offender: { type: 'boolean' },
+    button_policy_floor: { type: 'boolean' }
   }
 });
 
@@ -70,7 +71,8 @@ export function createIncident({
   contacts_notified_at = null,
   dispatch_record = null,
   dispatch_stage = 'ALERTED',
-  repeat_offender = false
+  repeat_offender = false,
+  button_policy_floor = false
 }) {
   const lat = location?.lat == null ? null : Number(location.lat);
   const lng = location?.lng == null ? null : Number(location.lng);
@@ -114,7 +116,8 @@ export function createIncident({
       simulated: Boolean(dispatch_record.simulated)
     } : null,
     dispatch_stage: DISPATCH_STAGES.includes(dispatch_stage) ? dispatch_stage : 'ALERTED',
-    repeat_offender: Boolean(repeat_offender)
+    repeat_offender: Boolean(repeat_offender),
+    button_policy_floor: Boolean(button_policy_floor)
   };
 }
 
@@ -163,5 +166,6 @@ export function isIncident(value) {
     && (typeof value.contacts_notified_at === 'string' || value.contacts_notified_at === null)
     && (value.dispatch_record === null || DISPATCH_STATUSES.includes(value.dispatch_record.status))
     && DISPATCH_STAGES.includes(value.dispatch_stage)
-    && typeof value.repeat_offender === 'boolean';
+    && typeof value.repeat_offender === 'boolean'
+    && typeof value.button_policy_floor === 'boolean';
 }

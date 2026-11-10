@@ -15,12 +15,31 @@ function capWords(value, maxWords = 15) {
   return String(value || '').trim().split(/\s+/).filter(Boolean).slice(0, maxWords).join(' ');
 }
 
+function matchPolarity(text, pattern) {
+  const matcher = new RegExp(pattern.source, `${pattern.flags.replaceAll('g', '')}g`);
+  let foundNegated = false;
+  for (const match of text.matchAll(matcher)) {
+    const start = Math.max(
+      text.lastIndexOf('.', match.index), text.lastIndexOf('!', match.index),
+      text.lastIndexOf('?', match.index), text.lastIndexOf(';', match.index),
+      text.lastIndexOf('\n', match.index)
+    ) + 1;
+    const prefix = text.slice(start, match.index);
+    const negated = /\b(?:no|not|never|without|isn't|aren't|wasn't|weren't|don't|doesn't|didn't|can't|cannot)\b(?:[\s,]+[\p{L}\p{N}'-]+){0,3}[\s,]*$/iu.test(prefix);
+    if (!negated) return 'positive';
+    foundNegated = true;
+  }
+  return foundNegated ? 'negated' : 'none';
+}
+
 function scoreIncident({ audio_transcript_snippet = '', source = 'button', local_hour = new Date().getHours(), risk_level = 'standard' }) {
   const text = String(audio_transcript_snippet).slice(0, 4000).trim();
   let score = 0;
   const signals = [];
   for (const [pattern, weight] of URGENT) {
-    if (pattern.test(text)) { score += weight; signals.push(pattern.source.replaceAll('\\b', '').replace(/[()|?]/g, '')); }
+    const polarity = matchPolarity(text, pattern);
+    if (polarity === 'positive') { score += weight; signals.push(pattern.source.replaceAll('\\b', '').replace(/[()|?]/g, '')); }
+    else if (polarity === 'negated') { score -= weight; signals.push('negated_urgent_signal'); }
   }
   if (['button', 'shake', 'keyboard'].includes(source)) score += 3;
   if (['duress_pin', 'safe_walk_duress'].includes(source)) score += 8;
@@ -28,6 +47,7 @@ function scoreIncident({ audio_transcript_snippet = '', source = 'button', local
   if (local_hour >= 22 || local_hour < 5) score += 1;
   if (risk_level === 'high') score += 4;
   if (risk_level === 'elevated') score += 1;
+  score = Math.max(0, score);
   return { score, text, signals };
 }
 

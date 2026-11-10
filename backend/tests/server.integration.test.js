@@ -108,6 +108,7 @@ before(async () => {
       FULE_DATA_DIR: dataDir,
       EVIDENCE_STORAGE_DIR: join(dataDir, 'evidence'),
       FULE_CONTACTS_DELAY_MS: '350',
+      FULE_BUTTON_DISPATCH_GRACE_MS: '1000',
       FULE_DISPATCH_DELAY_MS: '1000',
       FULE_ESCALATION_DELAY_MS: '1200',
       FULE_SOS_IP_LIMIT: '100',

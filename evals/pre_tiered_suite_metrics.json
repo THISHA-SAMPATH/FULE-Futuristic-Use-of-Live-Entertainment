@@ -1,0 +1,129 @@
+{
+  "generated_from": "pre-negation-fix rule engine; before trigger-policy floor integration",
+  "splits": {
+    "dev": {
+      "context_triage": {
+        "n": 38,
+        "accuracy": 1,
+        "per_class": {
+          "LOW": {
+            "precision": 1,
+            "recall": 1,
+            "fpr": 0
+          },
+          "ELEVATED": {
+            "precision": 1,
+            "recall": 1,
+            "fpr": 0
+          },
+          "CRITICAL": {
+            "precision": 1,
+            "recall": 1,
+            "fpr": 0
+          }
+        },
+        "alert_load": 0.8157894736842105
+      },
+      "trigger_policy": {
+        "n": 32,
+        "pass": 17,
+        "fail": 15
+      },
+      "full_dev_engine_metrics": {
+        "n": 70,
+        "accuracy": 0.7571428571428571,
+        "per_class": {
+          "LOW": {
+            "precision": 1,
+            "recall": 0.2916666666666667,
+            "fpr": 0
+          },
+          "ELEVATED": {
+            "precision": 0.5454545454545454,
+            "recall": 1,
+            "fpr": 0.28846153846153844
+          },
+          "CRITICAL": {
+            "precision": 0.9333333333333333,
+            "recall": 1,
+            "fpr": 0.047619047619047616
+          }
+        },
+        "alert_load": 0.9
+      },
+      "full_dataset_after_label_cleanup": {
+        "n": 70,
+        "accuracy": 0.7571428571428571,
+        "per_class": {
+          "LOW": {
+            "precision": 1,
+            "recall": 0.2916666666666667,
+            "fpr": 0
+          },
+          "ELEVATED": {
+            "precision": 0.5454545454545454,
+            "recall": 1,
+            "fpr": 0.28846153846153844
+          },
+          "CRITICAL": {
+            "precision": 0.9333333333333333,
+            "recall": 1,
+            "fpr": 0.047619047619047616
+          }
+        },
+        "alert_load": 0.9
+      }
+    },
+    "test": {
+      "context_triage": {
+        "n": 22,
+        "accuracy": 0.9545454545454546,
+        "per_class": {
+          "LOW": {
+            "precision": 1,
+            "recall": 0.875,
+            "fpr": 0
+          },
+          "ELEVATED": {
+            "precision": 0.875,
+            "recall": 1,
+            "fpr": 0.06666666666666667
+          },
+          "CRITICAL": {
+            "precision": 1,
+            "recall": 1,
+            "fpr": 0
+          }
+        },
+        "alert_load": 0.6818181818181818
+      },
+      "trigger_policy": {
+        "n": 8,
+        "pass": 6,
+        "fail": 2
+      },
+      "full_dataset_after_label_cleanup": {
+        "n": 30,
+        "accuracy": 0.8666666667,
+        "alert_load": 0.7666666667,
+        "per_class": {
+          "LOW": {
+            "precision": 1,
+            "recall": 0.6363636364,
+            "fpr": 0
+          },
+          "ELEVATED": {
+            "precision": 0.7,
+            "recall": 1,
+            "fpr": 0.1304347826
+          },
+          "CRITICAL": {
+            "precision": 0.9230769231,
+            "recall": 1,
+            "fpr": 0.0555555556
+          }
+        }
+      }
+    }
+  }
+}

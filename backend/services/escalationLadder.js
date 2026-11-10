@@ -2,7 +2,7 @@ const ACTIVE = new Set(['PENDING_DISPATCH', 'DISPATCHING', 'ESCALATED']);
 
 export function createEscalationLadder({
   incident, isAcknowledged, isCancelled, isDispatchSent, onContacts, onDispatch,
-  contactsDelayMs = 30_000, dispatchDelayMs = 60_000,
+  contactsDelayMs = 30_000, dispatchDelayMs = 60_000, criticalDispatchDelayMs = 0,
   setTimer = setTimeout, clearTimer = clearTimeout, now = Date.now
 }) {
   let contactsTimer;
@@ -17,7 +17,7 @@ export function createEscalationLadder({
   const runDispatch = () => {
     if (stillNeedsResponse() && !isDispatchSent()) void onDispatch(incident);
   };
-  if (incident.threat_level === 'CRITICAL' && !isDispatchSent()) dispatchTimer = setTimer(runDispatch, 0);
+  if (incident.threat_level === 'CRITICAL' && !isDispatchSent()) dispatchTimer = setTimer(runDispatch, criticalDispatchDelayMs);
   else if (!isDispatchSent()) dispatchTimer = setTimer(runDispatch, Math.max(0, dispatchDelayMs - age));
   if (!incident.contacts_notified_at) contactsTimer = setTimer(runContacts, Math.max(0, contactsDelayMs - age));
   return {

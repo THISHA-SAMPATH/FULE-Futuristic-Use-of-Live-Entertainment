@@ -13,6 +13,7 @@ import { createStreamerRateLimiter, validateSosPayload } from './services/sosVal
 import { incidentRepository, loadIncidents, getIncident as getStoredIncident, listIncidentPage, listDispatchQueue, persistIncident, removeIncident, loadTrustedContactsFresh, saveTrustedContacts, recordFalseAlarm, flushIncidentWrites, cleanupIncidentData, closeIncidentStore } from './services/incidentStore.js';
 import { createDispatchProvider, createEmergencyReport } from './services/dispatchBridge.js';
 import { createEscalationLadder } from './services/escalationLadder.js';
+import { applyButtonTriggerFloor, createDeliveryPlan } from './services/deliveryPolicy.js';
 import { notifyTrustedContacts } from './services/trustedContactNotifier.js';
 import { authenticateAccess, authenticateTrustedContactStreamToken, createTrustedContactStreamToken, loginAccount, refreshAccount, revokeRefreshToken, registerAccount, requestGuardianApproval, approveGuardian } from './services/accountService.js';
 import { redis, redisEnabled, installSocketAdapter, verifyRuntimeInfrastructure, scheduleEscalationJobs, cancelEscalationJobs, scheduleSafeWalkCheckin, scheduleSafeWalkTimeout, cancelSafeWalkJobs, startBackgroundWorkers, closeRuntimeInfrastructure } from './services/runtimeInfrastructure.js';
@@ -37,6 +38,7 @@ httpServer.maxRequestsPerSocket = 1_000;
 const port = Number(process.env.PORT) || 4000;
 const allowedOrigin = process.env.FRONTEND_ORIGIN || 'http://localhost:5173';
 const demoMode = process.env.DEMO_MODE === 'true';
+const tieredDeliveryEnabled = process.env.FULE_TIERED_DELIVERY === 'true';
 if (process.env.NODE_ENV === 'production' && !process.env.DATABASE_URL) throw new Error('DATABASE_URL is required in production.');
 if (process.env.NODE_ENV === 'production' && !process.env.METRICS_TOKEN) throw new Error('METRICS_TOKEN is required in production.');
 if (process.env.NODE_ENV === 'production' && Buffer.from(process.env.EVIDENCE_ENCRYPTION_KEY || '', 'base64').length !== 32) throw new Error('EVIDENCE_ENCRYPTION_KEY must be base64 encoded 32 random bytes in production.');
@@ -550,12 +552,17 @@ async function createSosIncident(input) {
       lng: Number.isFinite(payload.location.lng) ? Math.round(payload.location.lng * 100) / 100 : null
     }
   };
-  const synthesis = provisionalTriage(synthesisInput);
-  const incident = createIncident({
+  const rawSynthesis = provisionalTriage(synthesisInput);
+  const initialThreatLevel = applyButtonTriggerFloor({ source: payload.source, threat_level: rawSynthesis.threat_level });
+  const synthesis = initialThreatLevel === rawSynthesis.threat_level ? rawSynthesis : {
+    ...rawSynthesis, threat_level: initialThreatLevel, recommended_action: 'ALERT_GUARDIANS_AND_CALL_112'
+  };
+  const deliveryPlan = createDeliveryPlan({ threat_level: synthesis.threat_level, tieredEnabled: tieredDeliveryEnabled });
+  let incident = createIncident({
     incident_id: `sos-${activatedAt}-${randomBytes(4).toString('hex')}`, threat_level: synthesis.threat_level,
     module: payload.module_type, location: payload.location, summary: synthesis.summary,
-    recommended_action: synthesis.recommended_action, status: 'PENDING_DISPATCH', created_at: new Date(activatedAt).toISOString(),
-    source: payload.source, stream_url: null,
+    recommended_action: synthesis.recommended_action, status: deliveryPlan.route === 'log_only' ? 'RESOLVED' : 'PENDING_DISPATCH', created_at: new Date(activatedAt).toISOString(),
+    source: payload.source, stream_url: null, button_policy_floor: initialThreatLevel !== rawSynthesis.threat_level,
     transcript_snippet: payload.audio_transcript_snippet,
     streamer_contact: { streamer_id: payload.streamer_id, display_name: demoMode ? 'Demo Streamer' : 'FULE member' },
     dispatch_stage: 'GUARDIANS'
@@ -592,23 +599,35 @@ async function createSosIncident(input) {
   }
   incidents.set(incident.incident_id, persistedIncident);
   await flushIncidentWrites();
+  if (deliveryPlan.notify_trusted_circle_now) {
+    await contactTrustedPeople(incident.incident_id);
+    incident = createIncident(incidents.get(incident.incident_id) || incident);
+  }
+  if (deliveryPlan.route === 'log_only') {
+    await writeAudit({ event: 'LOW_TRIAGE_LOGGED', incident_id: incident.incident_id, actor_id: 'system', details: 'Tiered delivery is enabled; LOW incident recorded without notifications.' });
+  }
   const broadcastStarted = process.hrtime.bigint();
   let nearbyOffered = 0;
   let nearbyResponders = [];
-  try { nearbyResponders = await notifyNearbyGuardians(incident); nearbyOffered = nearbyResponders.length; }
-  catch (error) { log('error', 'nearby_guardian_matching_failed', { incident_id: incident.incident_id, error: error.message }); }
+  if (deliveryPlan.notify_guardians) {
+    try { nearbyResponders = await notifyNearbyGuardians(incident); nearbyOffered = nearbyResponders.length; }
+    catch (error) { log('error', 'nearby_guardian_matching_failed', { incident_id: incident.incident_id, error: error.message }); }
+  }
   const proximityRooms = nearbyResponders.map((responder) => `guardian:${responder.guardian_id}`);
-  if (proximityRooms.length) io.to('guardians').except(proximityRooms).emit('sos_activated', { ...incident, grace_period_seconds: 10 });
-  else io.to('guardians').emit('sos_activated', { ...incident, grace_period_seconds: 10 });
-  for (const responder of nearbyResponders) io.to(`guardian:${responder.guardian_id}`).emit('sos_activated', { ...toPublicIncident(incident), grace_period_seconds: 10 });
-  if (!input.silent_public) io.to('public').emit('incident:public', toPublicIncident(incident));
+  if (deliveryPlan.notify_guardians) {
+    if (proximityRooms.length) io.to('guardians').except(proximityRooms).emit('sos_activated', { ...incident, grace_period_seconds: 10 });
+    else io.to('guardians').emit('sos_activated', { ...incident, grace_period_seconds: 10 });
+    for (const responder of nearbyResponders) io.to(`guardian:${responder.guardian_id}`).emit('sos_activated', { ...toPublicIncident(incident), grace_period_seconds: 10 });
+  }
+  if (!input.silent_public && deliveryPlan.route !== 'log_only') io.to('public').emit('incident:public', toPublicIncident(incident));
   alertDeliveryLatency.observe(Number(process.hrtime.bigint() - broadcastStarted) / 1e9);
-  try { await scheduleDispatch(incident, { contactsDelayMs, dispatchDelayMs }); }
+  try { if (deliveryPlan.schedule_escalation) await scheduleDispatch(incident, { contactsDelayMs, dispatchDelayMs }); }
   catch (error) {
     log('error', 'durable_escalation_queue_unavailable_using_local_timer', { incident_id: incident.incident_id, taxonomy: 'dependency', error: error.message });
     databaseDegraded = databaseDegraded || Boolean(incidentRepository.db);
     const scheduled = createEscalationLadder({
       incident, contactsDelayMs, dispatchDelayMs,
+      criticalDispatchDelayMs: incident.button_policy_floor ? Math.max(0, Number(process.env.FULE_BUTTON_DISPATCH_GRACE_MS) || 10_000) : 0,
       isAcknowledged: () => incidents.get(incident.incident_id)?.status === 'ACKNOWLEDGED',
       isCancelled: () => ['CANCELLED','FALSE_ALARM','RESOLVED'].includes(incidents.get(incident.incident_id)?.status),
       isDispatchSent: () => ['SENT','ACKNOWLEDGED'].includes(incidents.get(incident.incident_id)?.dispatch_record?.status),
@@ -619,7 +638,10 @@ async function createSosIncident(input) {
   }
   void runTriage(synthesisInput).then(async (triageResult) => {
     if (!incidents.has(incident.incident_id)) return;
-    const updated = await changeIncident(incident.incident_id, triageResult, { event: 'TRIAGE_UPDATED', actorId: 'system' });
+    const current = incidents.get(incident.incident_id);
+    const policyThreatLevel = applyButtonTriggerFloor({ source: current.source, threat_level: triageResult.threat_level, status: current.status });
+    const safeTriageResult = policyThreatLevel === triageResult.threat_level ? triageResult : { ...triageResult, threat_level: policyThreatLevel, recommended_action: 'ALERT_GUARDIANS_AND_CALL_112' };
+    const updated = await changeIncident(incident.incident_id, safeTriageResult, { event: 'TRIAGE_UPDATED', actorId: 'system' });
     void emitIncidentUpdate(updated, 'incident_updated');
   }).catch((error) => log('error', 'incident_synthesis_update_failed', { incident_id: incident.incident_id, error: error.message }));
   return { status: 201, body: { incident, streamer_cancel_token: cancelToken, nearby_offered_count: nearbyOffered, nearby_accepted_count: 0 } };
@@ -672,10 +694,14 @@ async function notifyNearbyGuardians(incident) {
   return responders;
 }
 
-async function scheduleDispatch(incident, { contactsDelayMs = 30_000, dispatchDelayMs = 60_000 } = {}) {
+async function scheduleDispatch(incident, {
+  contactsDelayMs = 30_000,
+  dispatchDelayMs = 60_000,
+  criticalDispatchDelayMs = incident.button_policy_floor ? Math.max(0, Number(process.env.FULE_BUTTON_DISPATCH_GRACE_MS) || 10_000) : 0
+} = {}) {
   const incidentId = incident.incident_id;
   if (redisEnabled) {
-    await scheduleEscalationJobs(incidentId, { contactsDelayMs, dispatchDelayMs: incident.threat_level === 'CRITICAL' ? 0 : dispatchDelayMs });
+    await scheduleEscalationJobs(incidentId, { contactsDelayMs, dispatchDelayMs: incident.threat_level === 'CRITICAL' ? criticalDispatchDelayMs : dispatchDelayMs });
     timers.set(incidentId, { cancel: () => { void cancelEscalationJobs(incidentId); } });
     return;
   }
@@ -683,6 +709,7 @@ async function scheduleDispatch(incident, { contactsDelayMs = 30_000, dispatchDe
     incident,
     contactsDelayMs,
     dispatchDelayMs,
+    criticalDispatchDelayMs,
     isAcknowledged: () => incidents.get(incidentId)?.status === 'ACKNOWLEDGED',
     isCancelled: () => ['CANCELLED', 'FALSE_ALARM', 'RESOLVED'].includes(incidents.get(incidentId)?.status),
     isDispatchSent: () => ['SENT', 'ACKNOWLEDGED'].includes(incidents.get(incidentId)?.dispatch_record?.status),

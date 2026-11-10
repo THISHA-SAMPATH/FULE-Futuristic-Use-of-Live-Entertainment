@@ -35,3 +35,10 @@ test('CRITICAL incidents dispatch immediately without waiting for the 60 second 
   createEscalationLadder({ incident: { status: 'PENDING_DISPATCH', threat_level: 'CRITICAL', created_at: new Date(0).toISOString() }, now: clock.now, setTimer: clock.setTimer, clearTimer: clock.clearTimer, isAcknowledged: () => false, isCancelled: () => false, isDispatchSent: () => false, onContacts: () => calls.push('contacts'), onDispatch: () => calls.push('dispatch') });
   await clock.advance(0); assert.deepEqual(calls, ['dispatch']);
 });
+
+test('button-policy CRITICAL dispatch waits through its cancel grace window', async () => {
+  const clock = fakeClock(); const calls = [];
+  const ladder = createEscalationLadder({ incident: { status: 'PENDING_DISPATCH', threat_level: 'CRITICAL', created_at: new Date(0).toISOString() }, now: clock.now, setTimer: clock.setTimer, clearTimer: clock.clearTimer, isAcknowledged: () => false, isCancelled: () => false, isDispatchSent: () => false, onContacts: () => calls.push('contacts'), onDispatch: () => calls.push('dispatch'), criticalDispatchDelayMs: 10_000 });
+  await clock.advance(9_999); assert.deepEqual(calls, []);
+  ladder.cancel(); await clock.advance(1); assert.deepEqual(calls, []);
+});
